@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>micro-climat-predict - Tableau de bord Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
+    <!-- Header / Navbar unifiée -->
+    {% include 'navbar.html' %}
+
+    <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
+        <!-- Global Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Statut de la base</h3>
+                <p class="text-lg font-semibold mt-1 {% if db_exists %}text-green-400{% else %}text-red-400{% endif %}">
+                    {% if db_exists %}Connectée{% else %}Vide / Absente{% endif %}
+                </p>
+            </div>
+            <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Volume & Fréquence</h3>
+                <p class="text-lg font-semibold text-white mt-1">{{ total_rows }} lignes</p>
+                <p class="text-xs text-gray-400 mt-0.5">Pas : {{ sampling_freq }}</p>
+            </div>
+            <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Date de début</h3>
+                <p class="text-sm font-semibold text-white mt-1 truncate">{{ start_date }}</p>
+            </div>
+            <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Date de fin</h3>
+                <p class="text-sm font-semibold text-white mt-1 truncate">{{ end_date }}</p>
+            </div>
+        </div>
+
+        <!-- Chart Section -->
+        {% if chart_data_payload and chart_data_payload.timestamps %}
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                <h2 class="text-lg font-medium text-white">Évolution des Données et Paramètres Solaires</h2>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <button id="btnModePast" onclick="switchMode('past')" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
+                        📊 Mode Validation
+                    </button>
+                    <button id="btnModeForecast" onclick="switchMode('forecast')" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
+                        🔮 Mode Prévision
+                    </button>
+                    <button id="btnModeAll" onclick="switchMode('all')" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
+                        📈 Tout afficher
+                    </button>
+                    <button onclick="window.myChart.resetZoom()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow border border-gray-600 ml-2">
+                        🔍 Reset Zoom
+                    </button>
+                </div>
+            </div>
+            <div class="relative h-[420px] w-full">
+                <canvas id="tempChart"></canvas>
+            </div>
+        </div>
+        <script>
+            const chartData = {{ chart_data_payload | tojson }};
+            const ctx = document.getElementById('tempChart').getContext('2d');
+
+            const datasetsPast = [
+                { label: "Extérieur Réel", data: chartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Extérieur Prédit (Passé)", data: chartData.ext_temp_pred_past, borderColor: "#fca5a5", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Réel", data: chartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Prédit (Passé)", data: chartData.int_temp_pred_past, borderColor: "#93c5fd", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Corridor", data: chartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
+                { label: "Open-Meteo", data: chartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
+            ];
+
+            const datasetsForecast = [
+                { label: "Extérieur Réel", data: chartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Extérieur Prédit", data: chartData.ext_temp_forecast_mode, borderColor: "#fca5a5", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Réel", data: chartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Prédit", data: chartData.int_temp_forecast_mode, borderColor: "#93c5fd", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Corridor", data: chartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
+                { label: "Open-Meteo (Passé)", data: chartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Open-Meteo (Prévision)", data: chartData.meteo_temp_forecast, borderColor: "#94a3b8", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
+            ];
+
+            const datasetsAll = [
+                { label: "Extérieur (°C)", data: chartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Intérieur (°C)", data: chartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Corridor (°C)", data: chartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Open-Meteo (°C)", data: chartData.meteo_temp, borderColor: "#10b981", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Humidité Ext (%)", data: chartData.ext_hum, borderColor: "#06b6d4", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
+                { label: "Humidité Int (%)", data: chartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
+                { label: "Humidité Cor (%)", data: chartData.cor_hum, borderColor: "#6366f1", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Humidité Météo (%)", data: chartData.meteo_hum, borderColor: "#14b8a6", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Vent (km/h)", data: chartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
+                { label: "Élévation Solaire (°)", data: chartData.sun_elevation, borderColor: "#eab308", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Azimut Solaire (°)", data: chartData.sun_azimuth, borderColor: "#f59e0b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true }
+            ];
+
+            window.myChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: chartData.timestamps, datasets: datasetsPast },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#e5e7eb' } },
+                        zoom: {
+                            pan: { enabled: true, mode: 'x', speed: 20 },
+                            zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x' }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        y: { type: 'linear', position: 'left', grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#9ca3af' } }
+                    }
+                }
+            });
+
+            function switchMode(mode) {
+                document.getElementById('btnModePast').className = "bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
+                document.getElementById('btnModeForecast').className = "bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
+                document.getElementById('btnModeAll').className = "bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
+
+                if (mode === 'past') {
+                    window.myChart.data.datasets = datasetsPast;
+                    document.getElementById('btnModePast').className = "bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
+                } else if (mode === 'forecast') {
+                    window.myChart.data.datasets = datasetsForecast;
+                    document.getElementById('btnModeForecast').className = "bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
+                } else if (mode === 'all') {
+                    window.myChart.data.datasets = datasetsAll;
+                    document.getElementById('btnModeAll').className = "bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
+                }
+                window.myChart.update();
+            }
+        </script>
+        {% endif %}
+
+        <!-- Detailed Statistics per Metric / Sensor -->
+        {% if stats_columns %}
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6">
+            <h2 class="text-lg font-medium text-white mb-4">Statistiques et valeurs manquantes par capteur</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {% for col, stats in stats_columns.items() %}
+                <div class="bg-gray-900 p-4 rounded-lg border border-gray-700">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-semibold text-blue-300 text-sm">{{ col }}</span>
+                        <span class="text-xs px-2 py-0.5 rounded {% if missing_counts[col] > 0 %}bg-yellow-900 text-yellow-300{% else %}bg-green-900 text-green-300{% endif %}">
+                            Vides : {{ missing_counts[col] }}
+                        </span>
+                    </div>
+                    <div class="text-xs text-gray-300 grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-gray-800">
+                        <div>Min: <span class="font-bold text-white">{{ stats.min }}</span></div>
+                        <div>Moy: <span class="font-bold text-white">{{ stats.mean }}</span></div>
+                        <div>Max: <span class="font-bold text-white">{{ stats.max }}</span></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Data Table -->
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-gray-700">
+                <h2 class="text-lg font-medium text-white">50 Dernières Mesures Enregistrées</h2>
+            </div>
+            <div class="overflow-x-auto max-h-[400px]">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider sticky top-0">
+                            {% for col in columns %}
+                            <th class="px-6 py-3">{{ col }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700 text-sm">
+                        {% for row in records %}
+                        <tr class="hover:bg-gray-750 transition">
+                            {% for col in columns %}
+                            <td class="px-6 py-3 whitespace-nowrap">{{ row[col] }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="{{ columns|length if columns else 1 }}" class="px-6 py-6 text-center text-gray-500">
+                                Aucune donnée disponible.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

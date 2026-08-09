@@ -1,0 +1,59 @@
+<nav class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex justify-between items-center flex-shrink-0 relative z-50">
+    <div>
+        <h1 class="text-sm font-bold text-blue-400 tracking-wide">micro-climat-predict</h1>
+        <p class="text-[10px] text-gray-400">
+            {% if active_page == 'graph' %}Vue temps réel et prévisions{% elif active_page == 'admin' %}Administration & Pilotage{% else %}Historique des Opérations{% endif %}
+        </p>
+    </div>
+
+    <!-- Liens pour grands écrans (Desktop) -->
+    <div class="hidden md:flex items-center gap-5 text-xs font-medium text-gray-300">
+        {% if active_page == 'graph' %}
+            <a href="#" id="view-toggle-btn" class="hover:text-white transition"></a>
+            <a href="/admin" class="hover:text-white transition">⚙️ Admin</a>
+        {% elif active_page == 'admin' %}
+            <a href="/" class="hover:text-white transition">📈 Graphique</a>
+            <a href="/logs" class="hover:text-white transition">📜 Logs</a>
+            <a href="/trigger-train" class="hover:text-purple-400 transition">🧠 Entraîner</a>
+            <a href="/trigger-collect" class="hover:text-blue-400 transition">🔄 Collecter</a>
+        {% elif active_page == 'logs' %}
+            <a href="/" class="hover:text-white transition">📈 Graphique</a>
+            <a href="/admin" class="hover:text-white transition">⚙️ Admin</a>
+        {% endif %}
+    </div>
+
+    <!-- Bouton Hamburger pour Mobile -->
+    <div class="md:hidden flex items-center">
+        <button id="menu-btn" class="text-gray-300 hover:text-white focus:outline-none p-1">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Menu déroulant Mobile (caché par défaut) -->
+    <div id="mobile-menu" class="hidden absolute top-full left-0 w-full bg-gray-800 border-b border-gray-700 flex flex-col p-4 gap-3 text-xs shadow-xl">
+        {% if active_page == 'graph' %}
+            <a href="#" id="view-toggle-btn-mobile" class="text-gray-300 hover:text-white py-1"></a>
+            <a href="/admin" class="text-gray-300 hover:text-white py-1">⚙️ Admin</a>
+        {% elif active_page == 'admin' %}
+            <a href="/" class="text-gray-300 hover:text-white py-1">📈 Graphique</a>
+            <a href="/logs" class="text-gray-300 hover:text-white py-1">📜 Logs</a>
+            <a href="/trigger-train" class="text-purple-400 hover:text-purple-300 py-1">🧠 Entraîner</a>
+            <a href="/trigger-collect" class="text-blue-400 hover:text-blue-300 py-1">🔄 Collecter</a>
+        {% elif active_page == 'logs' %}
+            <a href="/" class="text-gray-300 hover:text-white py-1">📈 Graphique</a>
+            <a href="/admin" class="text-gray-300 hover:text-white py-1">⚙️ Admin</a>
+        {% endif %}
+    </div>
+</nav>
+
+<script>
+    const menuBtn = document.getElementById('menu-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    if (menuBtn && mobileMenu) {
+        menuBtn.addEventListener('click', () => {
+            mobileMenu.classList.toggle('hidden');
+        });
+    }
+</script>

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title id="page-title">micro-climat-predict - Températures</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        .custom-tooltip {
+            background: #1a1a1a;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        .custom-tooltip-title {
+            font-weight: bold;
+            margin-bottom: 6px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 4px;
+            color: #ccc;
+        }
+        .custom-tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 15px;
+            margin-bottom: 3px;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased h-screen flex flex-col overflow-hidden">
+    <!-- Inclusion de la barre de navigation mutualisée -->
+    {% include 'navbar.html' %}
+
+    <!-- Main Container -->
+    <div class="flex-grow p-4 flex flex-col gap-4 overflow-hidden">
+        <!-- État des capteurs en haut -->
+        <div id="states-header" class="grid grid-cols-3 gap-4 bg-gray-800 p-4 rounded-xl border border-gray-700 shadow flex-shrink-0">
+            <div class="flex flex-col items-center text-center">
+                <span class="text-2xl font-bold" id="val-ext" style="color:#f39c12">--°C</span>
+                <span class="text-xs text-gray-400 mt-1">Extérieur</span>
+            </div>
+            <div class="flex flex-col items-center text-center">
+                <span class="text-2xl font-bold" id="val-cor" style="color:#3498db">--°C</span>
+                <span class="text-xs text-gray-400 mt-1">Couloir</span>
+            </div>
+            <div class="flex flex-col items-center text-center">
+                <span class="text-2xl font-bold" id="val-int" style="color:#e74c3c">--°C</span>
+                <span class="text-xs text-gray-400 mt-1">Intérieur</span>
+            </div>
+        </div>
+
+        <div id="peak-countdown" style="text-align: center; font-size: 13px; color: #f39c12; display: none;"></div>
+
+        <!-- Section Graphique ApexCharts -->
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow flex-grow p-4 relative overflow-hidden flex flex-col">
+            <div id="chart" class="w-full flex-grow min-h-[350px]"></div>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const version = urlParams.get('v') === '7d' ? '7d' : '24h';
+
+        // Mise à jour des libellés du bouton de bascule 24h/7d (desktop et mobile)
+        const toggleTexts = version === '24h' ? ['📅 Vue 7 jours', '?v=7d'] : ['🕒 Vue 24h', '?v=24h'];
+        ['view-toggle-btn', 'view-toggle-btn-mobile'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.href = toggleTexts[1];
+                el.innerText = toggleTexts[0];
+            }
+        });
+
+        let chart = null;
+
+        function getMidnightAnnotations() {
+            let annotations = [];
+            let now = new Date();
+            for (let i = -30; i <= 7; i++) {
+                let d = new Date(now);
+                d.setDate(d.getDate() + i);
+                d.setHours(0, 0, 0, 0);
+
+                annotations.push({
+                    x: d.getTime(),
+                    borderColor: '#4b5563',
+                    strokeDashArray: 4,
+                    label: {
+                        text: d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }),
+                        style: {
+                            color: '#e5e7eb',
+                            background: '#1f2937',
+                            fontSize: '11px',
+                            padding: { left: 5, right: 5, top: 2, bottom: 2 }
+                        },
+                        orientation: 'horizontal',
+                        offsetY: 0
+                    }
+                });
+            }
+            return annotations;
+        }
+
+        function interpolateValue(dataArray, targetTime) {
+            if (!dataArray || dataArray.length === 0) return null;
+            if (targetTime < dataArray[0][0] || targetTime > dataArray[dataArray.length - 1][0]) {
+                return null;
+            }
+
+            for (let i = 0; i < dataArray.length - 1; i++) {
+                let p1 = dataArray[i];
+                let p2 = dataArray[i + 1];
+                if (targetTime >= p1[0] && targetTime <= p2[0]) {
+                    let t1 = p1[0], v1 = p1[1];
+                    let t2 = p2[0], v2 = p2[1];
+                    if (t1 === t2) return v1;
+                    let interpolated = v1 + (v2 - v1) * (targetTime - t1) / (t2 - t1);
+                    return Math.round(interpolated * 10) / 10;
+                }
+            }
+            return null;
+        }
+
+        function loadData() {
+            fetch(`/api-meteo/data/${version}?_t=${Date.now()}`)
+                .then(res => {
+                    if (!res.ok) throw new Error("HTTP error: " + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    document.getElementById('val-int').innerText = data.current.int;
+                    document.getElementById('val-cor').innerText = data.current.cor;
+                    document.getElementById('val-ext').innerText = data.current.ext;
+                    document.getElementById('page-title').innerText = `Ext : ${data.current.ext} | Int : ${data.current.int} | Couloir : ${data.current.cor}`;
+
+                    let seriesData = data.series || [];
+
+                    let allTimestamps = [];
+                    seriesData.forEach(s => {
+                        (s.data || []).forEach(pt => allTimestamps.push(pt[0]));
+                    });
+
+                    let now = Date.now();
+                    let minTime = allTimestamps.length > 0 ? Math.min(...allTimestamps) : now - (24 * 3600 * 1000);
+                    let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
+
+                    const styleMap = {
+                        'Intérieur': { color: '#3b82f6', width: 2, dash: 0 },
+                        'Couloir': { color: '#8b5cf6', width: 2, dash: 0 },
+                        'Extérieur': { color: '#ef4444', width: 2, dash: 0 },
+                        'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 },
+                        'Intérieur (Prévu)': { color: '#93c5fd', width: 2, dash: 5 },
+                        'Extérieur (Prévu)': { color: '#fca5a5', width: 2, dash: 5 }
+                    };
+
+                    let chartColors = [];
+                    let strokeWidths = [];
+                    let strokeDash = [];
+
+                    seriesData.forEach(s => {
+                        let cfg = styleMap[s.name] || { color: '#ffffff', width: 2, dash: 0 };
+                        chartColors.push(cfg.color);
+                        strokeWidths.push(cfg.width);
+                        strokeDash.push(cfg.dash);
+                    });
+
+                    let chartAnnotations = getMidnightAnnotations();
+
+                    if (data.inversion_time) {
+                        let invDate = new Date(data.inversion_time);
+                        let timeStr = invDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+                        chartAnnotations.push({
+                            x: data.inversion_time,
+                            borderColor: '#10b981',
+                            strokeDashArray: 2,
+                            label: {
+                                text: 'Ouvrez à ' + timeStr,
+                                style: {
+                                    color: '#fff',
+                                    background: '#059669',
+                                    fontSize: '11px',
+                                    padding: { left: 5, right: 5, top: 3, bottom: 3 }
+                                },
+                                orientation: 'horizontal',
+                                offsetY: 25
+                            }
+                        });
+                    }
+
+                    const countdownEl = document.getElementById('peak-countdown');
+                    if (data.peak_message) {
+                        countdownEl.innerText = data.peak_message;
+                        countdownEl.style.display = 'block';
+                    } else {
+                        countdownEl.style.display = 'none';
+                    }
+
+                    const chartContainer = document.querySelector("#chart");
+                    const exactHeight = chartContainer.clientHeight > 50 ? chartContainer.clientHeight : 400;
+
+                    if (chart) {
+                        chart.updateOptions({
+                            stroke: { curve: 'straight', width: strokeWidths, dashArray: strokeDash },
+                            colors: chartColors,
+                            xaxis: { min: minTime, max: maxTime },
+                            annotations: { xaxis: chartAnnotations },
+                            chart: { height: exactHeight }
+                        });
+                        chart.updateSeries(seriesData);
+                    } else {
+                        var options = {
+                            chart: {
+                                type: 'line',
+                                height: exactHeight,
+                                background: 'transparent',
+                                selection: { enabled: false },
+                                zoom: { enabled: true, type: 'x', autoScaleYaxis: true, pinch: true },
+                                pan: { enabled: true, mode: 'x', speed: 20, inertia: true },
+                                toolbar: { show: true, autoSelected: 'pan' },
+                                locales: [{
+                                    name: 'fr',
+                                    options: {
+                                        months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'],
+                                        shortMonths: ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'],
+                                        days: ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'],
+                                        shortDays: ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
+                                    }
+                                }],
+                                defaultLocale: 'fr'
+                            },
+                            theme: { mode: 'dark' },
+                            series: seriesData,
+                            annotations: { xaxis: chartAnnotations },
+                            xaxis: {
+                                type: 'datetime',
+                                min: minTime,
+                                max: maxTime,
+                                tickAmount: version === '7d' ? 7 : 12,
+                                labels: {
+                                    datetimeUTC: false,
+                                    formatter: function(val, timestamp) {
+                                        if (version === '7d') {
+                                            return new Date(timestamp).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+                                        }
+                                        return new Date(val).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                                    },
+                                    style: { colors: '#9ca3af' }
+                                },
+                                axisBorder: { color: '#374151' },
+                                axisTicks: { color: '#374151' }
+                            },
+                            yaxis: {
+                                labels: { style: { colors: '#9ca3af' } }
+                            },
+                            grid: { borderColor: 'rgba(255, 255, 255, 0.05)' },
+                            stroke: { curve: 'straight', width: strokeWidths, dashArray: strokeDash },
+                            colors: chartColors,
+                            tooltip: {
+                                shared: false,
+                                intersect: false,
+                                custom: function({ series, seriesIndex, dataPointIndex, w }) {
+                                    let dataPoint = w.globals.initialSeries[seriesIndex].data[dataPointIndex];
+                                    if (!dataPoint) return '';
+
+                                    let timestamp = dataPoint[0];
+                                    let nowTime = new Date().getTime();
+                                    let dateStr = new Date(timestamp).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }) + ' à ' + new Date(timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+                                    let html = `<div class="custom-tooltip">
+                                        <div class="custom-tooltip-title">${dateStr}</div>`;
+
+                                    w.globals.initialSeries.forEach((s, idx) => {
+                                        let color = w.globals.colors[idx];
+                                        let val = '--';
+
+                                        if (timestamp > nowTime && idx < 3) {
+                                            val = '--';
+                                        } else {
+                                            let found = s.data.find(pt => Math.abs(pt[0] - timestamp) < 30000);
+                                            if (found) {
+                                                val = found[1];
+                                            } else {
+                                                let interpolated = interpolateValue(s.data, timestamp);
+                                                if (interpolated !== null) {
+                                                    val = interpolated;
+                                                }
+                                            }
+                                        }
+
+                                        html += `<div class="custom-tooltip-row">
+                                            <span style="color: ${color}; font-weight: bold;">● ${s.name}</span>
+                                            <span style="margin-left: 15px;">${val !== '--' ? val + ' °C' : '--'}</span>
+                                        </div>`;
+                                    });
+
+                                    html += `</div>`;
+                                    return html;
+                                }
+                            }
+                        };
+                        chart = new ApexCharts(chartContainer, options);
+                        chart.render();
+                    }
+                })
+                .catch(err => console.error("Error loading data:", err));
+        }
+
+        loadData();
+        setInterval(loadData, 300000);
+
+        window.addEventListener('resize', () => {
+            if (chart) {
+                const chartContainer = document.querySelector("#chart");
+                const newHeight = chartContainer.clientHeight;
+                if (newHeight > 0) {
+                    chart.updateOptions({ chart: { height: newHeight } });
+                }
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  data-collector:
+    build: ./data-collector
+    container_name: data-collector
+    volumes:
+      - data-volume:/app/data
+    environment:
+      - HA_URL=${HA_URL}
+      - HA_TOKEN=${HA_TOKEN}
+      - LAT=${LAT}
+      - LON=${LON}
+    networks:
+      - meteo_network
+
+  ml-engine:
+    build: ./ml-engine
+    container_name: ml-engine
+    restart: unless-stopped
+    volumes:
+      - data-volume:/app/data
+    ports:
+      - "8002:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - meteo_network
+
+  web-ui:
+    build: ./web-ui
+    container_name: web-ui
+    ports:
+      - "8000:8000"
+    volumes:
+      - data-volume:/app/data
+    environment:
+      - HA_URL=${HA_URL}
+      - HA_TOKEN=${HA_TOKEN}
+    networks:
+      - meteo_network
+
+networks:
+  meteo_network:
+    driver: bridge
+
+volumes:
+  data-volume:

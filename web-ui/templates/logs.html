@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>micro-climat-predict - Historique des Opérations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
+    <!-- Header / Navbar unifiée -->
+    {% include 'navbar.html' %}
+
+    <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
+        <!-- Collection Logs Table -->
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-700">
+                <h2 class="text-lg font-medium text-white">🔄 Historique des Collectes de Données</h2>
+            </div>
+            <div class="overflow-x-auto max-h-[400px]">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider sticky top-0">
+                            <th class="px-6 py-3">ID</th>
+                            <th class="px-6 py-3">Horodatage (UTC)</th>
+                            <th class="px-6 py-3">Jours demandés</th>
+                            <th class="px-6 py-3">Lignes traitées</th>
+                            <th class="px-6 py-3">Statut</th>
+                            <th class="px-6 py-3">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700 text-sm">
+                        {% for log in collection_logs %}
+                        <tr class="hover:bg-gray-750 transition">
+                            <td class="px-6 py-3 font-mono text-xs">{{ log.id }}</td>
+                            <td class="px-6 py-3 whitespace-nowrap">{{ log.timestamp }}</td>
+                            <td class="px-6 py-3">{{ log.days_fetched }} jours</td>
+                            <td class="px-6 py-3">{{ log.rows_processed }}</td>
+                            <td class="px-6 py-3">
+                                <span class="px-2 py-0.5 rounded text-xs {% if log.status == 'success' %}bg-green-900 text-green-300{% else %}bg-red-900 text-red-300{% endif %}">
+                                    {{ log.status }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-3 text-gray-400 truncate max-w-xs">{{ log.message }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="px-6 py-6 text-center text-gray-500">
+                                Aucun historique de collecte enregistré pour le moment.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Training Logs Table -->
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-gray-700">
+                <h2 class="text-lg font-medium text-white">🧠 Historique des Entraînements du Modèle</h2>
+            </div>
+            <div class="overflow-x-auto max-h-[400px]">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider sticky top-0">
+                            <th class="px-6 py-3">ID</th>
+                            <th class="px-6 py-3">Horodatage (UTC)</th>
+                            <th class="px-6 py-3">Lignes Ext.</th>
+                            <th class="px-6 py-3">Lignes Int.</th>
+                            <th class="px-6 py-3">RMSE Ext.</th>
+                            <th class="px-6 py-3">RMSE Int.</th>
+                            <th class="px-6 py-3">Statut</th>
+                            <th class="px-6 py-3">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700 text-sm">
+                        {% for log in training_logs %}
+                        <tr class="hover:bg-gray-750 transition">
+                            <td class="px-6 py-3 font-mono text-xs">{{ log.id }}</td>
+                            <td class="px-6 py-3 whitespace-nowrap">{{ log.timestamp }}</td>
+                            <td class="px-6 py-3">{{ log.rows_ext }}</td>
+                            <td class="px-6 py-3">{{ log.rows_int }}</td>
+                            <td class="px-6 py-3 font-mono text-xs">{{ log.rmse_ext if log.rmse_ext is not none else 'N/A' }}</td>
+                            <td class="px-6 py-3 font-mono text-xs">{{ log.rmse_int if log.rmse_int is not none else 'N/A' }}</td>
+                            <td class="px-6 py-3">
+                                <span class="px-2 py-0.5 rounded text-xs {% if log.status == 'success' %}bg-green-900 text-green-300{% else %}bg-red-900 text-red-300{% endif %}">
+                                    {{ log.status }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-3 text-gray-400 truncate max-w-xs">{{ log.message }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="8" class="px-6 py-6 text-center text-gray-500">
+                                Aucun historique d'entraînement enregistré pour le moment.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

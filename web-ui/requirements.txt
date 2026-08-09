@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+jinja2
+pandas
+httpx
+python-dotenv
+scipy
