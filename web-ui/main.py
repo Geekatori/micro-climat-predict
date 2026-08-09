@@ -366,7 +366,7 @@ async def get_apex_metrics(version: str):
             if max_sim_dt and max_sim_dt > now_utc:
                 time_to_peak = max_sim_dt - now_utc
                 total_minutes = int(time_to_peak.total_seconds() // 60)
-                if total_minutes > 0:
+                if total_minutes > 0 and total_minutes < 240: # inférieur à 4 heures
                     hours = total_minutes // 60
                     minutes = total_minutes % 60
                     if hours > 0:
