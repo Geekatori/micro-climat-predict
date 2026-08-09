@@ -29,9 +29,7 @@ ML_ENGINE_URL = os.getenv("ML_ENGINE_URL", "http://ml-engine:8000")
 SENSOR_CONFIG = {
     "ext_temp": {"label": "Extérieur (°C) Réel", "color": "#ef4444", "dash": [], "type": "local"},
     "int_temp": {"label": "Intérieur (°C) Réel", "color": "#3b82f6", "dash": [], "type": "local"},
-    "cor_temp": {"label": "Cor / Temtop (°C)", "color": "#8b5cf6", "dash": [], "type": "local"},
-    "sun_elevation": {"label": "Élévation Solaire (°)", "color": "#eab308", "dash": [], "type": "calc"},
-    "sun_azimuth": {"label": "Azimut Solaire (°)", "color": "#f59e0b", "dash": [], "type": "calc"}
+    "cor_temp": {"label": "Cor / Temtop (°C)", "color": "#8b5cf6", "dash": [], "type": "local"}
 }
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -130,8 +128,6 @@ async def admin_dashboard(request: Request):
                     "meteo_hum_forecast": df["meteo_hum_forecast"].tolist() if "meteo_hum_forecast" in df else [],
                     "wind_speed_past": df["wind_speed_past"].tolist() if "wind_speed_past" in df else [],
                     "wind_speed_forecast": df["wind_speed_forecast"].tolist() if "wind_speed_forecast" in df else [],
-                    "sun_elevation": df["sun_elevation"].tolist() if "sun_elevation" in df else [],
-                    "sun_azimuth": df["sun_azimuth"].tolist() if "sun_azimuth" in df else [],
                     "ext_hum": df["ext_hum"].tolist() if "ext_hum" in df else [],
                     "int_hum": df["int_hum"].tolist() if "int_hum" in df else [],
                     "cor_hum": df["cor_hum"].tolist() if "cor_hum" in df else [],
@@ -349,7 +345,6 @@ async def get_apex_metrics(version: str):
     # --- 1. CALCUL DU MESSAGE DU PIC DE CHALEUR ---
     peak_message = None
 
-    # Vérification si le capteur extérieur est en pleine croissance (comparaison avec il y a 1h)
     ext_history = ha_data_dict.get("ext_temp", [])
     if len(ext_history) > 1:
         current_ext_val = ext_history[-1][1]
@@ -361,7 +356,6 @@ async def get_apex_metrics(version: str):
             is_growing = current_ext_val > past_ext_candidates[-1]
 
         if is_growing and sim_ext_points:
-            # Recherche du pic dans les prévisions d'inférence extérieure
             max_sim_dt = None
             max_sim_val = -999.0
             for dt, val in sim_ext_points:
@@ -384,8 +378,6 @@ async def get_apex_metrics(version: str):
     inversion_timestamp = None
     if sim_int_points and sim_ext_points:
         ext_dict = {dt: val for dt, val in sim_ext_points}
-
-        # On trie les points intérieurs par ordre chronologique
         sorted_int = sorted(sim_int_points, key=lambda x: x[0])
 
         for i in range(1, len(sorted_int)):
@@ -399,7 +391,6 @@ async def get_apex_metrics(version: str):
             ext2 = ext_dict.get(dt2)
 
             if ext1 is not None and ext2 is not None:
-                # Détection d'un croisement (passage de ext > int à ext < int ou inversement)
                 if (ext1 >= int1 and ext2 < int2) or (ext1 <= int1 and ext2 > int2):
                     diff1 = ext1 - int1
                     diff2 = ext2 - int2
@@ -451,7 +442,6 @@ async def validation_error_page(request: Request, model: str = "ext"):
             conn.close()
 
             if not df_metrics.empty:
-                # Récupération des prévisions depuis le ml-engine
                 forecast_dict = {}
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/{model}", timeout=5.0)
@@ -461,16 +451,15 @@ async def validation_error_page(request: Request, model: str = "ext"):
 
                 col_name = "ext_temp" if model == "ext" else "int_temp"
                 if col_name not in df_metrics.columns:
-                    col_name = "ext" if model == "ext" else "int" # Fallback selon nommage
+                    col_name = "ext" if model == "ext" else "int"
 
                 if col_name in df_metrics.columns:
                     df_metrics["pred"] = df_metrics["timestamp"].map(forecast_dict)
                     df_valid = df_metrics.dropna(subset=[col_name, "pred"]).copy()
 
                     if not df_valid.empty:
-                        df_valid["error"] = df_valid[col_name] - df_valid["pred"] # Erreur signée
+                        df_valid["error"] = df_valid[col_name] - df_valid["pred"]
 
-                        # Calculs statistiques globaux
                         errors = df_valid["error"]
                         metrics_summary["mean_error"] = round(errors.mean(), 2)
                         metrics_summary["mae"] = round(errors.abs().mean(), 2)

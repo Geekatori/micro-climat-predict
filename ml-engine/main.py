@@ -8,12 +8,17 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
+from astral import LocationInfo
+from astral.sun import elevation, azimuth
 
 app = FastAPI()
 
 DB_PATH = "/app/data/metrics.db"
 MODEL_EXT_PATH = "/app/data/model_ext.joblib"
 MODEL_INT_PATH = "/app/data/model_int.joblib"
+
+LAT = float(os.getenv("LAT", 45.7797))
+LON = float(os.getenv("LON", 3.0863))
 
 FEATURES_EXT = [
     "meteo_temp", "meteo_hum", "wind_speed", "sun_elevation", "sun_azimuth",
@@ -43,13 +48,33 @@ def init_db():
     conn.commit()
     conn.close()
 
+def calculate_solar_position(dt: datetime, lat: float, lon: float):
+    loc = LocationInfo(latitude=lat, longitude=lon)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    elev = elevation(loc.observer, dt)
+    azim = azimuth(loc.observer, dt)
+    return round(float(elev), 2), round(float(azim), 2)
+
+def add_solar_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Ajoute les colonnes sun_elevation et sun_azimuth à partir des timestamps."""
+    elevs, azims = [], []
+    loc = LocationInfo(latitude=LAT, longitude=LON)
+    for ts in pd.to_datetime(df["timestamp"]):
+        dt = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+        elevs.append(elevation(loc.observer, dt))
+        azims.append(azimuth(loc.observer, dt))
+    df["sun_elevation"] = elevs
+    df["sun_azimuth"] = azims
+    return df
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
 
 @app.post("/api/train")
 async def train_models():
-    """Entraîne les modèles avec intégration des lag features pour la mémoire thermique."""
+    """Entraîne les modèles avec intégration des lag features et calcul solaire à la volée."""
     init_db()
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -63,6 +88,9 @@ async def train_models():
 
         if df.empty:
             raise HTTPException(status_code=400, detail="Database is empty.")
+
+        # Calcul à la volée de la position du soleil
+        df = add_solar_features(df)
 
         df["ext_lag1"] = df["ext_temp"].shift(6)
         df["ext_lag2"] = df["ext_temp"].shift(12)
@@ -92,7 +120,7 @@ async def train_models():
         conn.execute("""
             INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (now_str, len(df), len(df), rmse_ext, rmse_int, "success", "Models trained with lag features"))
+        """, (now_str, len(df), len(df), rmse_ext, rmse_int, "success", "Models trained with solar calc and lag features"))
         conn.commit()
         conn.close()
 
@@ -108,18 +136,23 @@ async def forecast_ext():
 
     model = joblib.load(MODEL_EXT_PATH)
     conn = sqlite3.connect(DB_PATH)
-    df_m = pd.read_sql("SELECT timestamp, ext_temp, meteo_temp, meteo_hum, wind_speed, sun_elevation, sun_azimuth FROM metrics ORDER BY timestamp ASC", conn)
+    df_m = pd.read_sql("SELECT timestamp, ext_temp, meteo_temp, meteo_hum, wind_speed FROM metrics ORDER BY timestamp ASC", conn)
     try:
-        df_f = pd.read_sql("SELECT timestamp, meteo_temp, meteo_hum, wind_speed, sun_elevation, sun_azimuth FROM weather_forecasts ORDER BY timestamp ASC", conn)
+        df_f = pd.read_sql("SELECT timestamp, meteo_temp, meteo_hum, wind_speed FROM weather_forecasts ORDER BY timestamp ASC", conn)
     except:
         df_f = pd.DataFrame()
     conn.close()
 
-    df_m["ext_lag1"] = df_m["ext_temp"].shift(6)
-    df_m["ext_lag2"] = df_m["ext_temp"].shift(12)
+    # Fusion des données passées et futures (Open-Meteo)
+    df_combined = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+
+    # Calcul de la position du soleil sur l'ensemble combiné
+    df_combined = add_solar_features(df_combined)
+
+    df_combined["ext_lag1"] = df_combined["ext_temp"].shift(6)
+    df_combined["ext_lag2"] = df_combined["ext_temp"].shift(12)
     last_val = df_m["ext_temp"].dropna().iloc[-1] if not df_m["ext_temp"].dropna().empty else 20.0
 
-    df_combined = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
     df_combined["ext_lag1"] = df_combined["ext_lag1"].ffill().fillna(last_val)
     df_combined["ext_lag2"] = df_combined["ext_lag2"].ffill().fillna(last_val)
 
@@ -139,18 +172,23 @@ async def forecast_int():
 
     model = joblib.load(MODEL_INT_PATH)
     conn = sqlite3.connect(DB_PATH)
-    df_m = pd.read_sql("SELECT timestamp, int_temp, meteo_temp, meteo_hum, wind_speed, sun_elevation, sun_azimuth FROM metrics ORDER BY timestamp ASC", conn)
+    df_m = pd.read_sql("SELECT timestamp, int_temp, meteo_temp, meteo_hum, wind_speed FROM metrics ORDER BY timestamp ASC", conn)
     try:
-        df_f = pd.read_sql("SELECT timestamp, meteo_temp, meteo_hum, wind_speed, sun_elevation, sun_azimuth FROM weather_forecasts ORDER BY timestamp ASC", conn)
+        df_f = pd.read_sql("SELECT timestamp, meteo_temp, meteo_hum, wind_speed FROM weather_forecasts ORDER BY timestamp ASC", conn)
     except:
         df_f = pd.DataFrame()
     conn.close()
 
-    df_m["int_lag1"] = df_m["int_temp"].shift(6)
-    df_m["int_lag2"] = df_m["int_temp"].shift(12)
+    # Fusion des données passées et futures (Open-Meteo)
+    df_combined = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+
+    # Calcul de la position du soleil sur l'ensemble combiné
+    df_combined = add_solar_features(df_combined)
+
+    df_combined["int_lag1"] = df_combined["int_temp"].shift(6)
+    df_combined["int_lag2"] = df_combined["int_temp"].shift(12)
     last_val = df_m["int_temp"].dropna().iloc[-1] if not df_m["int_temp"].dropna().empty else 20.0
 
-    df_combined = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
     df_combined["int_lag1"] = df_combined["int_lag1"].ffill().fillna(last_val)
     df_combined["int_lag2"] = df_combined["int_lag2"].ffill().fillna(last_val)
 

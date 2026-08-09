@@ -40,7 +40,7 @@
         {% if chart_data_payload and chart_data_payload.timestamps %}
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6">
             <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                <h2 class="text-lg font-medium text-white">Évolution des Données et Paramètres Solaires</h2>
+                <h2 class="text-lg font-medium text-white">Évolution des Données Météo et Capteurs</h2>
                 <div class="flex items-center gap-2 flex-wrap">
                     <button id="btnModePast" onclick="switchMode('past')" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
                         📊 Mode Validation
@@ -92,9 +92,7 @@
                 { label: "Humidité Int (%)", data: chartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
                 { label: "Humidité Cor (%)", data: chartData.cor_hum, borderColor: "#6366f1", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
                 { label: "Humidité Météo (%)", data: chartData.meteo_hum, borderColor: "#14b8a6", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Vent (km/h)", data: chartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
-                { label: "Élévation Solaire (°)", data: chartData.sun_elevation, borderColor: "#eab308", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Azimut Solaire (°)", data: chartData.sun_azimuth, borderColor: "#f59e0b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true }
+                { label: "Vent (km/h)", data: chartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' }
             ];
 
             window.myChart = new Chart(ctx, {

@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 import httpx
 from fastapi import FastAPI
 import pandas as pd
-from astral import LocationInfo
-from astral.sun import elevation, azimuth
 
 load_dotenv()
 
@@ -32,7 +30,7 @@ ENTITIES = {
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    # Historical validated metrics (past only)
+    # Table historique sans le soleil
     conn.execute("""
         CREATE TABLE IF NOT EXISTS metrics (
             timestamp TEXT PRIMARY KEY,
@@ -44,23 +42,18 @@ def init_db():
             cor_hum REAL,
             meteo_temp REAL,
             meteo_hum REAL,
-            wind_speed REAL,
-            sun_elevation REAL,
-            sun_azimuth REAL
+            wind_speed REAL
         )
     """)
-    # Future weather forecasts (volatile, separate table)
+    # Table prévisions météo sans le soleil
     conn.execute("""
         CREATE TABLE IF NOT EXISTS weather_forecasts (
             timestamp TEXT PRIMARY KEY,
             meteo_temp REAL,
             meteo_hum REAL,
-            wind_speed REAL,
-            sun_elevation REAL,
-            sun_azimuth REAL
+            wind_speed REAL
         )
     """)
-    # Collection logs
     conn.execute("""
         CREATE TABLE IF NOT EXISTS collection_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,14 +66,6 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
-def calculate_solar_position(dt: datetime, lat: float, lon: float):
-    loc = LocationInfo(latitude=lat, longitude=lon)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    elev = elevation(loc.observer, dt)
-    azim = azimuth(loc.observer, dt)
-    return round(float(elev), 2), round(float(azim), 2)
 
 def get_optimal_fetch_window(db_path: str) -> int:
     if not os.path.exists(db_path): return 10
@@ -125,7 +110,6 @@ async def fetch_weather_data_days(days: int):
                             except: continue
         except Exception as e: print(f"HA Error: {e}")
 
-        # Fetch continuous block including past and future in a single request
         meteo_past_points = []
         meteo_future_points = []
         try:
@@ -165,8 +149,6 @@ async def run_collection():
             df_meteo_past = pd.DataFrame(meteo_past_points, columns=["timestamp", "meteo_temp", "meteo_hum", "wind_speed"])
             df_meteo_past["timestamp"] = pd.to_datetime(df_meteo_past["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
             df_meteo_past = df_meteo_past.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill()
-            solar = [calculate_solar_position(ts, LAT, LON) for ts in df_meteo_past.index]
-            df_meteo_past["sun_elevation"], df_meteo_past["sun_azimuth"] = [s[0] for s in solar], [s[1] for s in solar]
             dfs_past.append(df_meteo_past)
 
         if dfs_past:
@@ -181,13 +163,11 @@ async def run_collection():
             conn.execute("""
                 INSERT INTO metrics (
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, meteo_temp, meteo_hum,
-                    wind_speed, sun_elevation, sun_azimuth
+                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed
                 )
                 SELECT
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, meteo_temp, meteo_hum,
-                    wind_speed, sun_elevation, sun_azimuth
+                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed
                 FROM metrics_temp
                 WHERE true
                 ON CONFLICT(timestamp) DO UPDATE SET
@@ -199,9 +179,7 @@ async def run_collection():
                     cor_hum = COALESCE(metrics.cor_hum, excluded.cor_hum),
                     meteo_temp = COALESCE(metrics.meteo_temp, excluded.meteo_temp),
                     meteo_hum = COALESCE(metrics.meteo_hum, excluded.meteo_hum),
-                    wind_speed = COALESCE(metrics.wind_speed, excluded.wind_speed),
-                    sun_elevation = COALESCE(metrics.sun_elevation, excluded.sun_elevation),
-                    sun_azimuth = COALESCE(metrics.sun_azimuth, excluded.sun_azimuth);
+                    wind_speed = COALESCE(metrics.wind_speed, excluded.wind_speed);
             """)
             conn.execute("DROP TABLE metrics_temp")
             conn.commit()
@@ -212,8 +190,6 @@ async def run_collection():
             df_meteo_future = pd.DataFrame(meteo_future_points, columns=["timestamp", "meteo_temp", "meteo_hum", "wind_speed"])
             df_meteo_future["timestamp"] = pd.to_datetime(df_meteo_future["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
             df_meteo_future = df_meteo_future.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill()
-            solar_fut = [calculate_solar_position(ts, LAT, LON) for ts in df_meteo_future.index]
-            df_meteo_future["sun_elevation"], df_meteo_future["sun_azimuth"] = [s[0] for s in solar_fut], [s[1] for s in solar_fut]
 
             final_future_df = df_meteo_future.reset_index()
             numeric_cols_fut = final_future_df.select_dtypes(include=["number"]).columns
@@ -226,7 +202,6 @@ async def run_collection():
             conn.commit()
             conn.close()
 
-        # Record success log
         conn = sqlite3.connect(DB_PATH)
         conn.execute("""
             INSERT INTO collection_logs (timestamp, days_fetched, rows_processed, status, message)
@@ -249,22 +224,3 @@ async def run_collection():
         except:
             pass
         raise e
-
-@app.get("/api/data")
-async def get_stored_data():
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql("SELECT * FROM metrics", conn)
-    conn.close()
-    return df.to_dict(orient="records")
-
-@app.delete("/api/clean")
-async def clean_database():
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("DROP TABLE IF EXISTS metrics")
-        conn.execute("DROP TABLE IF EXISTS weather_forecasts")
-        conn.execute("DROP TABLE IF EXISTS collection_logs")
-        conn.commit(); conn.close()
-        init_db()
-        return {"status": "success", "message": "Database cleaned."}
-    except Exception as e: return {"status": "error", "message": str(e)}

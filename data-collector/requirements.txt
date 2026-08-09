@@ -4,4 +4,3 @@ httpx
 pandas
 python-dotenv
 apscheduler
-astral
