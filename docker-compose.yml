@@ -40,6 +40,16 @@ services:
     networks:
       - meteo_network
 
+  cron:
+    image: alpine
+    container_name: scheduler
+    command: >
+      /bin/sh -c "echo '*/30 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
+                  echo '0 3 * * * wget -qO- http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
+                  crond -f -l 8"
+    networks:
+      - meteo_network
+
 networks:
   meteo_network:
     driver: bridge

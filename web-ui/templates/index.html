@@ -150,12 +150,12 @@
                     let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
 
                     const styleMap = {
-                        'Intérieur': { color: '#3b82f6', width: 2, dash: 0 },
-                        'Couloir': { color: '#8b5cf6', width: 2, dash: 0 },
-                        'Extérieur': { color: '#ef4444', width: 2, dash: 0 },
-                        'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 },
-                        'Intérieur (Prévu)': { color: '#93c5fd', width: 2, dash: 5 },
-                        'Extérieur (Prévu)': { color: '#fca5a5', width: 2, dash: 5 }
+                        'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },         // Rouge/Corail comme le badge Intérieur
+                        'Couloir': { color: '#3498db', width: 2, dash: 0 },           // Bleu comme le badge Couloir
+                        'Extérieur': { color: '#f39c12', width: 2, dash: 0 },         // Orange comme le badge Extérieur
+                        'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 },      // Gris neutre
+                        'Intérieur (Prévu)': { color: '#f87171', width: 2, dash: 5 }, // Dérivé rouge clair pour le prévu
+                        'Extérieur (Prévu)': { color: '#fbd38d', width: 2, dash: 5 }  // Dérivé orange clair pour le prévu
                     };
 
                     let chartColors = [];
