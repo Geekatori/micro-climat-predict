@@ -20,8 +20,12 @@
     <div class="flex justify-between items-center mb-1">
     </div>
     <div id="chart" class="w-full flex-grow"></div>
-</div>
 
+    <!-- Badge de fraîcheur positionné en absolu (discret, sans impact vertical) -->
+    <span id="data-freshness" class="absolute bottom-2 right-4 text-[9px] md:text-[10px] text-gray-500 italic hidden pointer-events-none">
+        Données : --
+    </span>
+</div>
 <script>
     const urlParams = new URLSearchParams(window.location.search);
     const version = urlParams.get('v') === '7d' ? '7d' : '24h';
@@ -102,6 +106,19 @@
                 if (elCor) elCor.innerText = data.current.cor;
                 if (elExt) elExt.innerText = data.current.ext;
                 if (pageTitle) pageTitle.innerText = `Ext : ${data.current.ext} | Int : ${data.current.int} | Couloir : ${data.current.cor}`;
+
+                // Mise à jour de l'indicateur de fraîcheur des données
+                const freshEl = document.getElementById('data-freshness');
+                if (freshEl && data.generated_at) {
+                    // On parse le timestamp envoyé par le serveur (UTC)
+                    let d = new Date(data.generated_at);
+
+                    // Formatage en heure locale française
+                    let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+                    freshEl.innerText = `Données calculées à ${timeStr}`;
+                    freshEl.style.display = 'block';
+                }
 
                 let seriesData = data.series || [];
 

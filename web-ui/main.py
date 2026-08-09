@@ -433,11 +433,14 @@ async def get_apex_metrics(version: str):
 
     series_data = [s for s in series_data if len(s["data"]) > 0]
 
+    data_generated_at = datetime.now(timezone.utc).isoformat()
+
     return {
         "series": series_data,
         "current": current_values,
         "inversion_time": inversion_timestamp,
-        "peak_message": peak_message
+        "peak_message": peak_message,
+        "generated_at": data_generated_at
     }
 
 @app.get("/validation/error", response_class=HTMLResponse)
