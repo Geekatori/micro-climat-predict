@@ -236,6 +236,12 @@ async def main_dashboard(request: Request):
     """Affiche la page principale épurée (ApexCharts, vue 24h/7d, temps réel)."""
     return templates.TemplateResponse(request, "index.html", {"active_page": "graph"})
 
+@app.get("/widget", response_class=HTMLResponse)
+async def main_dashboard_widget(request: Request):
+    """Affiche la page principale épurée (ApexCharts, vue 24h/7d, temps réel)."""
+    return templates.TemplateResponse(request, "widget.html")
+
+
 @app.get("/api-meteo/data/{version}")
 async def get_apex_metrics(version: str):
     """Récupère l'historique capteurs en direct de Home Assistant et combine avec le ML/Open-Meteo."""
@@ -483,7 +489,7 @@ async def validation_error_page(request: Request, model: str = "ext"):
         request,
         "validation_error.html",
         {
-            "active_page": "error",
+            "active_page": "validation",
             "db_exists": db_exists,
             "current_model": model,
             "metrics_summary": metrics_summary,
