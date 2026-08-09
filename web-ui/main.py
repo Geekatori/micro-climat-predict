@@ -279,22 +279,28 @@ async def get_apex_metrics(version: str):
         except Exception as e:
             print(f"HA Direct API Error: {e}")
 
-        # 2. Récupération Open-Meteo
+        # 2. Récupération Open-Meteo depuis la base de données locale
         try:
-            lat = os.getenv("LATITUDE", "45.78")
-            lon = os.getenv("LONGITUDE", "3.08")
-            meteo_resp = await client.get(
-                f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m&past_days={7 if version == '7d' else 1}&forecast_days=2"
-            )
-            if meteo_resp.status_code == 200:
-                data = meteo_resp.json()["hourly"]
-                for t_str, temp in zip(data["time"], data["temperature_2m"]):
-                    dt = datetime.fromisoformat(t_str)
-                    ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+            conn_db = sqlite3.connect(DB_PATH)
+            df_m_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
+            try:
+                df_f_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM weather_forecasts WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
+            except:
+                df_f_meteo = pd.DataFrame()
+            conn_db.close()
+
+            df_meteo_combined = pd.concat([df_m_meteo, df_f_meteo]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+
+            for _, row in df_meteo_combined.iterrows():
+                try:
+                    dt = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).replace(tzinfo=None)
                     if start_time <= dt <= end_time:
-                        meteo_points.append([ts_ms, float(temp)])
+                        ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                        meteo_points.append([ts_ms, float(row["meteo_temp"])])
+                except:
+                    continue
         except Exception as e:
-            print(f"Meteo Error: {e}")
+            print(f"Meteo DB Error: {e}")
 
         # 3. Récupération Prévisions ML Extérieur
         try:
