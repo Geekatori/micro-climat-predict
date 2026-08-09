@@ -36,6 +36,27 @@
             </div>
         </div>
 
+        <!-- Bloc d'Actions Rapides de Pilotage -->
+        <div class="bg-gray-800 px-6 py-4 rounded-xl border border-gray-700 shadow flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div>
+                <h3 class="text-sm font-semibold text-white">Pilotage du Système & ML</h3>
+                <p class="text-xs text-gray-400">Actions de maintenance et de mise à jour des modèles</p>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap">
+                <a href="/trigger-train" class="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition shadow flex items-center gap-1.5">
+                    🧠 Entraîner les modèles
+                </a>
+                <a href="/trigger-collect" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition shadow flex items-center gap-1.5">
+                    🔄 Forcer la collecte
+                </a>
+                <a href="/trigger-clear"
+                    onclick="return confirm('⚠️ ATTENTION : Cela supprimera définitivement toute la base et les modèles. Êtes-vous sûr ?')"
+                    class="bg-red-600/30 hover:bg-red-600/50 text-red-300 border border-red-500/50 px-3 py-2 rounded-lg text-xs font-semibold transition shadow flex items-center gap-1.5">
+                    🗑️ Reset Total
+                </a>
+            </div>
+        </div>
+
         <!-- Chart Section -->
         {% if chart_data_payload and chart_data_payload.timestamps %}
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6">

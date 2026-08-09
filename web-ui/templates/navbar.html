@@ -1,61 +1,56 @@
-<nav class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex justify-between items-center flex-shrink-0 relative z-50">
-    <div>
-        <h1 class="text-sm font-bold text-blue-400 tracking-wide">micro-climat-predict</h1>
-        <p class="text-[10px] text-gray-400">
-            {% if active_page == 'graph' %}Vue temps réel et prévisions{% elif active_page == 'admin' %}Administration & Pilotage{% else %}Historique des Opérations{% endif %}
-        </p>
+<nav class="bg-gray-800 border-b border-gray-700 px-4 py-2.5 flex flex-col flex-shrink-0 relative z-50 gap-2">
+    <!-- Ligne Supérieure : Titre et Entrées Principales -->
+    <div class="flex justify-between items-center w-full">
+        <div>
+            <h1 class="text-sm font-bold text-blue-400 tracking-wide">micro-climat-predict</h1>
+            <p class="text-[10px] text-gray-400">
+                {% if active_page == 'graph' %}Vue temps réel et prévisions{% elif active_page == 'admin' %}Administration & Pilotage{% elif active_page == 'logs' %}Historique des Opérations{% elif active_page == 'validation' %}Validation des Erreurs{% else %}Pilotage ML{% endif %}
+            </p>
+        </div>
+
+        <!-- Liens principaux Desktop -->
+        <div class="hidden md:flex items-center gap-3 text-xs font-medium">
+            {% if active_page == 'graph' %}
+                <a href="#" id="view-toggle-btn" class="text-gray-300 hover:text-white transition px-3 py-1 bg-gray-700/50 rounded-lg"></a>
+                <a href="/admin" class="text-gray-300 hover:text-white transition px-3 py-1 bg-gray-700/50 rounded-lg">⚙️ Administration</a>
+            {% else %}
+                <a href="/" class="text-gray-300 hover:text-white transition px-3 py-1 bg-gray-700/50 rounded-lg">📈 Graphique Principal</a>
+                <span class="text-white font-semibold px-2">⚙️ Espace Administration</span>
+            {% endif %}
+        </div>
+
+        <!-- Bouton Hamburger pour Mobile -->
+        <div class="md:hidden flex items-center">
+            <button id="menu-btn" class="text-gray-300 hover:text-white focus:outline-none p-1">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+                </svg>
+            </button>
+        </div>
     </div>
 
-    <!-- Liens pour grands écrans (Desktop) -->
-    <div class="hidden md:flex items-center gap-5 text-xs font-medium text-gray-300">
-        {% if active_page == 'graph' %}
-            <a href="#" id="view-toggle-btn" class="hover:text-white transition"></a>
-            <a href="/admin" class="hover:text-white transition">⚙️ Admin</a>
-        {% elif active_page == 'admin' %}
-            <a href="/" class="hover:text-white transition">📈 Graphique</a>
-            <a href="/logs" class="hover:text-white transition">📜 Logs</a>
-            <a href="/validation/error" class="hover:text-white transition">📊 Validation Erreurs</a>
-            <a href="/trigger-train" class="hover:text-purple-400 transition">🧠 Entraîner</a>
-            <a href="/trigger-collect" class="hover:text-blue-400 transition">🔄 Collecter</a>
-            <a href="/trigger-clear"
-                onclick="return confirm('⚠️ ATTENTION : Cela supprimera définitivement toute la base et les modèles. Êtes-vous sûr ?')"
-                class="text-red-400 hover:text-red-300 font-semibold transition ml-2">
-                🗑️ Tout effacer
-                </a>
-        {% elif active_page == 'logs' %}
-            <a href="/" class="hover:text-white transition">📈 Graphique</a>
-            <a href="/admin" class="hover:text-white transition">⚙️ Admin</a>
-        {% endif %}
+    <!-- Ligne Inférieure : Sous-pages Admin alignées à droite (Desktop) -->
+    {% if active_page != 'graph' %}
+    <div class="hidden md:flex justify-end items-center w-full pt-2 border-t border-gray-700/60 text-xs font-medium text-gray-300 gap-2">
+        <a href="/admin" class="px-2.5 py-1 rounded-md transition {% if active_page == 'admin' %}bg-blue-600 text-white font-semibold{% else %}hover:bg-gray-700 hover:text-white{% endif %}">📊 Dashboard</a>
+        <a href="/logs" class="px-2.5 py-1 rounded-md transition {% if active_page == 'logs' %}bg-blue-600 text-white font-semibold{% else %}hover:bg-gray-700 hover:text-white{% endif %}">📜 Logs</a>
+        <a href="/validation/error" class="px-2.5 py-1 rounded-md transition {% if active_page == 'validation' %}bg-blue-600 text-white font-semibold{% else %}hover:bg-gray-700 hover:text-white{% endif %}">📊 Erreurs</a>
     </div>
+    {% endif %}
 
-    <!-- Bouton Hamburger pour Mobile -->
-    <div class="md:hidden flex items-center">
-        <button id="menu-btn" class="text-gray-300 hover:text-white focus:outline-none p-1">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
-            </svg>
-        </button>
-    </div>
-
-    <!-- Menu déroulant Mobile (caché par défaut) -->
+    <!-- Menu déroulant Mobile -->
     <div id="mobile-menu" class="hidden absolute top-full left-0 w-full bg-gray-800 border-b border-gray-700 flex flex-col p-4 gap-3 text-xs shadow-xl">
         {% if active_page == 'graph' %}
             <a href="#" id="view-toggle-btn-mobile" class="text-gray-300 hover:text-white py-1"></a>
-            <a href="/admin" class="text-gray-300 hover:text-white py-1">⚙️ Admin</a>
-        {% elif active_page == 'admin' %}
-            <a href="/" class="text-gray-300 hover:text-white py-1">📈 Graphique</a>
-            <a href="/logs" class="text-gray-300 hover:text-white py-1">📜 Logs</a>
-            <a href="/validation/error" class="hover:text-white transition">📊 Validation Erreurs</a>
-            <a href="/trigger-train" class="text-purple-400 hover:text-purple-300 py-1">🧠 Entraîner</a>
-            <a href="/trigger-collect" class="text-blue-400 hover:text-blue-300 py-1">🔄 Collecter</a>
-            <a href="/trigger-clear"
-                onclick="return confirm('⚠️ ATTENTION : Cela supprimera définitivement toute la base et les modèles. Êtes-vous sûr ?')"
-                class="text-red-400 hover:text-red-300 font-semibold transition ml-2">
-                🗑️ Tout effacer
-                </a>
-        {% elif active_page == 'logs' %}
-            <a href="/" class="text-gray-300 hover:text-white py-1">📈 Graphique</a>
-            <a href="/admin" class="text-gray-300 hover:text-white py-1">⚙️ Admin</a>
+            <a href="/admin" class="text-gray-300 hover:text-white py-1 border-t border-gray-700 pt-2">⚙️ Administration & Outils</a>
+        {% else %}
+            <a href="/" class="text-blue-400 hover:text-blue-300 py-1 font-semibold">📈 Retour au Graphique Principal</a>
+            <div class="border-t border-gray-700 pt-2 flex flex-col gap-1.5">
+                <span class="text-[10px] text-gray-500 uppercase tracking-wider">Navigation Admin</span>
+                <a href="/admin" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'admin' %}font-bold text-white{% endif %}">📊 Vue d'ensemble (Dashboard)</a>
+                <a href="/logs" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'logs' %}font-bold text-white{% endif %}">📜 Historique des Logs</a>
+                <a href="/validation/error" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'validation' %}font-bold text-white{% endif %}">📊 Analyse des Erreurs</a>
+            </div>
         {% endif %}
     </div>
 </nav>

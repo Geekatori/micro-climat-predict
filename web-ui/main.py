@@ -477,7 +477,7 @@ async def validation_error_page(request: Request, model: str = "ext"):
         request,
         "validation_error.html",
         {
-            "active_page": "admin",
+            "active_page": "error",
             "db_exists": db_exists,
             "current_model": model,
             "metrics_summary": metrics_summary,
