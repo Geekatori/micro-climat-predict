@@ -4,3 +4,4 @@ httpx
 pandas
 python-dotenv
 apscheduler
+asyncio

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import httpx
 from fastapi import FastAPI
 import pandas as pd
+import asyncio
 
 load_dotenv()
 
@@ -112,19 +113,40 @@ async def fetch_weather_data_days(days: int):
 
         meteo_past_points = []
         meteo_future_points = []
-        try:
-            meteo_resp = await client.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days={days}&forecast_days=2", timeout=10.0)
-            if meteo_resp.status_code == 200:
-                data = meteo_resp.json()["hourly"]
-                for t_str, temp, hum, wind in zip(data["time"], data["temperature_2m"], data["relative_humidity_2m"], data["wind_speed_10m"]):
-                    dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
-                    point = [dt, float(temp), float(hum), float(wind or 0.0)]
+        max_retries = 3
+        retry_delay = 2.0
 
-                    if dt <= now_utc:
-                        meteo_past_points.append(point)
-                    else:
-                        meteo_future_points.append(point)
-        except Exception as e: print(f"Meteo Error: {e}")
+        for attempt in range(max_retries):
+            try:
+                print(f"[{datetime.now()}] Fetching Open-Meteo data (Attempt {attempt + 1}/{max_retries})...")
+                meteo_resp = await client.get(
+                    f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days={days}&forecast_days=2",
+                    timeout=10.0
+                )
+                print(f"[{datetime.now()}] Open-Meteo response status: {meteo_resp.status_code}")
+
+                if meteo_resp.status_code == 200:
+                    data = meteo_resp.json()["hourly"]
+                    print(f"[{datetime.now()}] Successfully received {len(data.get('time', []))} hourly points.")
+                    for t_str, temp, hum, wind in zip(data["time"], data["temperature_2m"], data["relative_humidity_2m"], data["wind_speed_10m"]):
+                        dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
+                        point = [dt, float(temp), float(hum), float(wind or 0.0)]
+
+                        if dt <= now_utc:
+                            meteo_past_points.append(point)
+                        else:
+                            meteo_future_points.append(point)
+                    break  # Exit retry loop on success
+                else:
+                    print(f"[{datetime.now()}] Open-Meteo error HTTP {meteo_resp.status_code}: {meteo_resp.text}")
+            except Exception as e:
+                print(f"[{datetime.now()}] Open-Meteo exception on attempt {attempt + 1}: {e}")
+
+            # Wait before retrying if attempts remain
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+
+        print(f"[{datetime.now()}] Final summary -> meteo_past_points: {len(meteo_past_points)} | meteo_future_points: {len(meteo_future_points)}")
 
         return ha_data_dict, meteo_past_points, meteo_future_points
 
