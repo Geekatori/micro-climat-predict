@@ -125,7 +125,7 @@ async def fetch_weather_data_days(days: int):
                             except: continue
         except Exception as e: print(f"HA Error: {e}")
 
-        # On récupère un bloc continu incluant le passé et le futur en une seule requête
+        # Fetch continuous block including past and future in a single request
         meteo_past_points = []
         meteo_future_points = []
         try:
@@ -170,7 +170,10 @@ async def run_collection():
             dfs_past.append(df_meteo_past)
 
         if dfs_past:
-            final_past_df = pd.concat(dfs_past, axis=1).reset_index().round(2)
+            final_past_df = pd.concat(dfs_past, axis=1).reset_index()
+            numeric_cols_past = final_past_df.select_dtypes(include=["number"]).columns
+            final_past_df[numeric_cols_past] = final_past_df[numeric_cols_past].round(2)
+
             final_past_df["timestamp"] = final_past_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
             conn = sqlite3.connect(DB_PATH)
@@ -212,7 +215,10 @@ async def run_collection():
             solar_fut = [calculate_solar_position(ts, LAT, LON) for ts in df_meteo_future.index]
             df_meteo_future["sun_elevation"], df_meteo_future["sun_azimuth"] = [s[0] for s in solar_fut], [s[1] for s in solar_fut]
 
-            final_future_df = df_meteo_future.reset_index().round(2)
+            final_future_df = df_meteo_future.reset_index()
+            numeric_cols_fut = final_future_df.select_dtypes(include=["number"]).columns
+            final_future_df[numeric_cols_fut] = final_future_df[numeric_cols_fut].round(2)
+
             final_future_df["timestamp"] = final_future_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
             conn = sqlite3.connect(DB_PATH)
