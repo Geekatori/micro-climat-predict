@@ -3,6 +3,7 @@ version: "3.8"
 services:
   data-collector:
     build: ./data-collector
+    restart: unless-stopped
     container_name: data-collector
     volumes:
       - data-volume:/app/data
@@ -27,6 +28,7 @@ services:
 
   web-ui:
     build: ./web-ui
+    restart: unless-stopped
     container_name: web-ui
     ports:
       - "${WEB_PORT:-8000}:8000"
@@ -40,6 +42,7 @@ services:
 
   cron:
     image: alpine
+    restart: unless-stopped
     container_name: scheduler
     command: >
       /bin/sh -c "echo '*/30 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
