@@ -436,3 +436,62 @@ async def get_apex_metrics(version: str):
         "inversion_time": inversion_timestamp,
         "peak_message": peak_message
     }
+
+@app.get("/validation/error", response_class=HTMLResponse)
+async def validation_error_page(request: Request, model: str = "ext"):
+    """Affiche une vue histogramme de l'erreur (Mesure - Inférence) pour un modèle donné."""
+    db_exists = os.path.exists(DB_PATH)
+    chart_payload = {}
+    metrics_summary = {"mean_error": "N/A", "mae": "N/A", "rmse": "N/A"}
+
+    if db_exists:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
+            conn.close()
+
+            if not df_metrics.empty:
+                # Récupération des prévisions depuis le ml-engine
+                forecast_dict = {}
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/{model}", timeout=5.0)
+                    if resp.status_code == 200:
+                        for item in resp.json().get("forecasts", []):
+                            forecast_dict[item["timestamp"]] = item.get(f"predicted_{model}_temp")
+
+                col_name = "ext_temp" if model == "ext" else "int_temp"
+                if col_name not in df_metrics.columns:
+                    col_name = "ext" if model == "ext" else "int" # Fallback selon nommage
+
+                if col_name in df_metrics.columns:
+                    df_metrics["pred"] = df_metrics["timestamp"].map(forecast_dict)
+                    df_valid = df_metrics.dropna(subset=[col_name, "pred"]).copy()
+
+                    if not df_valid.empty:
+                        df_valid["error"] = df_valid[col_name] - df_valid["pred"] # Erreur signée
+
+                        # Calculs statistiques globaux
+                        errors = df_valid["error"]
+                        metrics_summary["mean_error"] = round(errors.mean(), 2)
+                        metrics_summary["mae"] = round(errors.abs().mean(), 2)
+                        metrics_summary["rmse"] = round(np.sqrt((errors ** 2).mean()), 2)
+
+                        chart_payload = {
+                            "timestamps": df_valid["timestamp"].tolist(),
+                            "errors": df_valid["error"].round(2).tolist(),
+                            "model": model
+                        }
+        except Exception as e:
+            print(f"Error generating error validation view: {e}")
+
+    return templates.TemplateResponse(
+        request,
+        "validation_error.html",
+        {
+            "active_page": "admin",
+            "db_exists": db_exists,
+            "current_model": model,
+            "metrics_summary": metrics_summary,
+            "chart_payload": chart_payload
+        }
+    )

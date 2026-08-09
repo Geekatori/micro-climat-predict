@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>micro-climat-predict - Validation des Erreurs</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js et ses dépendances nécessaires pour l'axe temporel et le zoom -->
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/min/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
+    {% include 'navbar.html' %}
+
+    <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
+        <!-- En-tête et Sélecteur de modèle -->
+        <div class="flex flex-col md:flex-row justify-between items-center bg-gray-800 p-5 rounded-xl border border-gray-700 shadow gap-4">
+            <div>
+                <h1 class="text-lg font-medium text-white">Analyse des Écarts (Mesure - Inférence)</h1>
+                <p class="text-xs text-gray-400">Évaluation de la précision du modèle sélectionné</p>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+                <a href="/validation/error?model=ext" class="px-4 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'ext' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
+                    Modèle Extérieur
+                </a>
+                <a href="/validation/error?model=int" class="px-4 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'int' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
+                    Modèle Intérieur
+                </a>
+                <button onclick="window.errorChart.resetZoom()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow border border-gray-600 ml-2">
+                    🔍 Reset Zoom
+                </button>
+            </div>
+        </div>
+
+        <!-- Cartes statistiques globales -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow text-center">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Biais Moyen (Error)</h3>
+                <p class="text-xl font-bold text-white mt-1">{{ metrics_summary.mean_error }} °C</p>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow text-center">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Erreur Absolue Moyenne (MAE)</h3>
+                <p class="text-xl font-bold text-white mt-1">{{ metrics_summary.mae }} °C</p>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow text-center">
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Racine Carrée de l'Erreur (RMSE)</h3>
+                <p class="text-xl font-bold text-white mt-1">{{ metrics_summary.rmse }} °C</p>
+            </div>
+        </div>
+
+        <!-- Graphique Histogramme des Erreurs -->
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6 flex-grow flex flex-col">
+            <div class="relative h-[450px] w-full flex-grow">
+                <canvas id="errorChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const payload = {{ chart_payload | tojson }};
+        if (payload && payload.timestamps && payload.timestamps.length > 0) {
+            const ctx = document.getElementById('errorChart').getContext('2d');
+
+            // Formatage des données sous forme de paires {x: timestamp, y: erreur}
+            const dataPoints = payload.timestamps.map((ts, idx) => ({
+                x: new Date(ts).getTime(),
+                y: payload.errors[idx]
+            }));
+
+            // Couleurs dynamiques (Vert -> Jaune -> Rouge)
+            const backgroundColors = payload.errors.map(err => {
+                let absErr = Math.abs(err);
+                if (absErr < 0.5) return 'rgba(16, 185, 129, 0.7)';
+                if (absErr < 1.5) return 'rgba(234, 179, 8, 0.7)';
+                return 'rgba(239, 68, 68, 0.7)';
+            });
+
+            // Génération automatique de lignes de repère verticales pour chaque minuit (changement de jour)
+            let annotations = {};
+            if (dataPoints.length > 0) {
+                let minTime = dataPoints[0].x;
+                let maxTime = dataPoints[dataPoints.length - 1].x;
+                let startDate = new Date(minTime);
+                startDate.setHours(0, 0, 0, 0);
+
+                let currentDate = new Date(startDate);
+                let counter = 0;
+                while (currentDate.getTime() <= maxTime) {
+                    if (currentDate.getTime() >= minTime) {
+                        annotations['line_' + counter] = {
+                            type: 'line',
+                            xMin: currentDate.getTime(),
+                            xMax: currentDate.getTime(),
+                            borderColor: 'rgba(75, 85, 99, 0.6)',
+                            borderWidth: 1,
+                            borderDash: [4, 4],
+                            label: {
+                                display: true,
+                                content: currentDate.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }),
+                                position: 'start',
+                                backgroundColor: 'rgba(31, 41, 55, 0.9)',
+                                color: '#e5e7eb',
+                                font: { size: 10 }
+                            }
+                        };
+                        counter++;
+                    }
+                    currentDate.setDate(currentDate.getDate() + 1);
+                }
+            }
+
+            window.errorChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    datasets: [{
+                        label: 'Erreur (Mesure - Inférence en °C)',
+                        data: dataPoints,
+                        backgroundColor: backgroundColors,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#e5e7eb' } },
+                        annotation: { annotations: annotations },
+                        zoom: {
+                            pan: { enabled: true, mode: 'x', speed: 20 },
+                            zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x' }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour',
+                                stepSize: 3,
+                                displayFormats: {
+                                    hour: 'HH:mm'
+                                }
+                            },
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#9ca3af' }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#9ca3af' }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
