@@ -32,6 +32,7 @@ Le projet repose sur une architecture de microservices avec Docker Compose :
 1. Créez un fichier `.env` à la racine du projet en vous basant sur l'exemple ci-dessous :
 
 ```env
+WEB_PORT=8000
 HA_URL=[http://homeassistant.local:8123](http://homeassistant.local:8123)
 HA_TOKEN=votre_token_longue_duree_home_assistant
 LAT=45.7797
