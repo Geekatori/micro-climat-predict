@@ -12,10 +12,15 @@ Le projet repose sur une architecture de microservices avec Docker Compose :
    - Calcule mathématiquement la position du soleil (élévation et azimut) pour chaque intervalle de temps.
    - Stocke et consolide le tout dans une base de données SQLite unique avec une stratégie de mise à jour glissante.
 
-2. **`web-ui`** (FastAPI + TailwindCSS + Chart.js) :
-   - Fournit un tableau de bord visuel et interactif.
-   - Affiche les statistiques des capteurs et un graphique dynamique distinguant les mesures réelles (traits pleins) des prévisions (pointillés).
-   - Permet de forcer une collecte manuelle des données à la demande.
+2. **`ml-engine`** (FastAPI + Scikit-Learn) :
+   - Entraîne des modèles de régression (Random Forest) pour anticiper l'évolution thermique.
+   - Fournit des endpoints de prévision pour les températures intérieures et extérieures.
+
+3. **`web-ui`** (FastAPI + TailwindCSS + ApexCharts) :
+   - Fournit un tableau de bord visuel et interactif avec bascule de vue 24h/7j.
+   - Se connecte désormais directement à l'API de Home Assistant pour afficher les courbes en temps réel tout en s'appuyant sur le moteur ML et SQLite pour les prévisions futures.
+   - Propose des pages d'administration et de suivi des logs d'opérations.
+   - Permet de déclencher manuellement les collectes et les entraînements à la demande.
 
 ## Prérequis
 
