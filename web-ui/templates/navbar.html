@@ -17,6 +17,11 @@
             <a href="/validation/error" class="hover:text-white transition">📊 Validation Erreurs</a>
             <a href="/trigger-train" class="hover:text-purple-400 transition">🧠 Entraîner</a>
             <a href="/trigger-collect" class="hover:text-blue-400 transition">🔄 Collecter</a>
+            <a href="/trigger-clear"
+                onclick="return confirm('⚠️ ATTENTION : Cela supprimera définitivement toute la base et les modèles. Êtes-vous sûr ?')"
+                class="text-red-400 hover:text-red-300 font-semibold transition ml-2">
+                🗑️ Tout effacer
+                </a>
         {% elif active_page == 'logs' %}
             <a href="/" class="hover:text-white transition">📈 Graphique</a>
             <a href="/admin" class="hover:text-white transition">⚙️ Admin</a>
@@ -43,6 +48,11 @@
             <a href="/validation/error" class="hover:text-white transition">📊 Validation Erreurs</a>
             <a href="/trigger-train" class="text-purple-400 hover:text-purple-300 py-1">🧠 Entraîner</a>
             <a href="/trigger-collect" class="text-blue-400 hover:text-blue-300 py-1">🔄 Collecter</a>
+            <a href="/trigger-clear"
+                onclick="return confirm('⚠️ ATTENTION : Cela supprimera définitivement toute la base et les modèles. Êtes-vous sûr ?')"
+                class="text-red-400 hover:text-red-300 font-semibold transition ml-2">
+                🗑️ Tout effacer
+                </a>
         {% elif active_page == 'logs' %}
             <a href="/" class="text-gray-300 hover:text-white py-1">📈 Graphique</a>
             <a href="/admin" class="text-gray-300 hover:text-white py-1">⚙️ Admin</a>

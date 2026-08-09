@@ -204,7 +204,7 @@ async def trigger_clear():
     except Exception as e:
         print(f"Failed to clear data and models: {e}")
 
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/admin", status_code=303)
 
 @app.get("/logs", response_class=HTMLResponse)
 async def logs_page(request: Request):
