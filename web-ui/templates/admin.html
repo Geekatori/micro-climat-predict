@@ -7,6 +7,16 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+    <script>
+        // Fonction utilitaire globale de conversion UTC -> Local
+        function parseUtcToLocal(dateStr) {
+            if (!dateStr) return null;
+            let isoStr = dateStr.includes('Z') || dateStr.includes('+') ? dateStr : dateStr.replace(' ', 'T') + 'Z';
+            return new Date(isoStr);
+        }
+    </script>
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
     <!-- Header / Navbar unifiée -->
@@ -27,14 +37,28 @@
                 <p class="text-xs text-gray-400 mt-0.5">Pas : {{ sampling_freq }}</p>
             </div>
             <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
-                <h3 class="text-xs uppercase font-semibold text-gray-400">Date de début</h3>
-                <p class="text-sm font-semibold text-white mt-1 truncate">{{ start_date }}</p>
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Date de début (Paris)</h3>
+                <p id="card-start-date" class="text-sm font-semibold text-white mt-1 truncate">{{ start_date }}</p>
             </div>
             <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
-                <h3 class="text-xs uppercase font-semibold text-gray-400">Date de fin</h3>
-                <p class="text-sm font-semibold text-white mt-1 truncate">{{ end_date }}</p>
+                <h3 class="text-xs uppercase font-semibold text-gray-400">Date de fin (Paris)</h3>
+                <p id="card-end-date" class="text-sm font-semibold text-white mt-1 truncate">{{ end_date }}</p>
             </div>
         </div>
+
+        <!-- Script d'initialisation des cartes du haut -->
+        <script>
+            function formatCardDate(elementId, dateStr) {
+                const el = document.getElementById(elementId);
+                if (!el) return;
+                let d = parseUtcToLocal(dateStr);
+                if (!isNaN(d.getTime())) {
+                    el.innerText = d.toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+                }
+            }
+            formatCardDate('card-start-date', "{{ start_date }}");
+            formatCardDate('card-end-date', "{{ end_date }}");
+        </script>
 
         <!-- Bloc d'Actions Rapides de Pilotage -->
         <div class="bg-gray-800 px-6 py-4 rounded-xl border border-gray-700 shadow flex flex-col sm:flex-row justify-between items-center gap-4">
@@ -82,43 +106,44 @@
             </div>
         </div>
         <script>
-            const chartData = {{ chart_data_payload | tojson }};
+            const rawChartData = {{ chart_data_payload | tojson }};
+            const localTimestamps = rawChartData.timestamps.map(ts => parseUtcToLocal(ts));
             const ctx = document.getElementById('tempChart').getContext('2d');
 
             const datasetsPast = [
-                { label: "Extérieur Réel", data: chartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Extérieur Prédit (Passé)", data: chartData.ext_temp_pred_past, borderColor: "#fca5a5", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Réel", data: chartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Prédit (Passé)", data: chartData.int_temp_pred_past, borderColor: "#93c5fd", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Corridor", data: chartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
-                { label: "Open-Meteo", data: chartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
+                { label: "Extérieur Réel", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Extérieur Prédit (Passé)", data: rawChartData.ext_temp_pred_past, borderColor: "#fca5a5", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Réel", data: rawChartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Prédit (Passé)", data: rawChartData.int_temp_pred_past, borderColor: "#93c5fd", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Corridor", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
+                { label: "Open-Meteo", data: rawChartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
             ];
 
             const datasetsForecast = [
-                { label: "Extérieur Réel", data: chartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Extérieur Prédit", data: chartData.ext_temp_forecast_mode, borderColor: "#fca5a5", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Réel", data: chartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Prédit", data: chartData.int_temp_forecast_mode, borderColor: "#93c5fd", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Corridor", data: chartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
-                { label: "Open-Meteo (Passé)", data: chartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Open-Meteo (Prévision)", data: chartData.meteo_temp_forecast, borderColor: "#94a3b8", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
+                { label: "Extérieur Réel", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Extérieur Prédit", data: rawChartData.ext_temp_forecast_mode, borderColor: "#fca5a5", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Réel", data: rawChartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Intérieur Prédit", data: rawChartData.int_temp_forecast_mode, borderColor: "#93c5fd", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Corridor", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
+                { label: "Open-Meteo (Passé)", data: rawChartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true },
+                { label: "Open-Meteo (Prévision)", data: rawChartData.meteo_temp_forecast, borderColor: "#94a3b8", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
             ];
 
             const datasetsAll = [
-                { label: "Extérieur (°C)", data: chartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Intérieur (°C)", data: chartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Corridor (°C)", data: chartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
-                { label: "Open-Meteo (°C)", data: chartData.meteo_temp, borderColor: "#10b981", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Humidité Ext (%)", data: chartData.ext_hum, borderColor: "#06b6d4", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
-                { label: "Humidité Int (%)", data: chartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
-                { label: "Humidité Cor (%)", data: chartData.cor_hum, borderColor: "#6366f1", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Humidité Météo (%)", data: chartData.meteo_hum, borderColor: "#14b8a6", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Vent (km/h)", data: chartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' }
+                { label: "Extérieur (°C)", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Intérieur (°C)", data: rawChartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Corridor (°C)", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Open-Meteo (°C)", data: rawChartData.meteo_temp, borderColor: "#10b981", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Humidité Ext (%)", data: rawChartData.ext_hum, borderColor: "#06b6d4", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
+                { label: "Humidité Int (%)", data: rawChartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
+                { label: "Humidité Cor (%)", data: rawChartData.cor_hum, borderColor: "#6366f1", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Humidité Météo (%)", data: rawChartData.meteo_hum, borderColor: "#14b8a6", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Vent (km/h)", data: rawChartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' }
             ];
 
             window.myChart = new Chart(ctx, {
                 type: 'line',
-                data: { labels: chartData.timestamps, datasets: datasetsPast },
+                data: { labels: localTimestamps, datasets: datasetsPast },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -130,7 +155,17 @@
                         }
                     },
                     scales: {
-                        x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        x: {
+                            type: 'time',
+                            time: {
+                                parser: 'yyyy-MM-dd HH:mm:ss',
+                                tooltipFormat: 'DD T',
+                                displayFormats: { hour: 'HH:mm', day: 'dd MMM' }
+                            },
+                            adapters: { date: { zone: 'Europe/Paris' } },
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#9ca3af' }
+                        },
                         y: { type: 'linear', position: 'left', grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
                         y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#9ca3af' } }
                     }
@@ -184,7 +219,7 @@
         <!-- Data Table -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-gray-700">
-                <h2 class="text-lg font-medium text-white">50 Dernières Mesures Enregistrées</h2>
+                <h2 class="text-lg font-medium text-white">50 Dernières Mesures Enregistrées (Heure Locale)</h2>
             </div>
             <div class="overflow-x-auto max-h-[400px]">
                 <table class="w-full text-left border-collapse">
@@ -199,7 +234,13 @@
                         {% for row in records %}
                         <tr class="hover:bg-gray-750 transition">
                             {% for col in columns %}
-                            <td class="px-6 py-3 whitespace-nowrap">{{ row[col] }}</td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if col == 'timestamp' %}
+                                    <span class="local-timestamp" data-utc="{{ row[col] }}">{{ row[col] }}</span>
+                                {% else %}
+                                    {{ row[col] }}
+                                {% endif %}
+                            </td>
                             {% endfor %}
                         </tr>
                         {% else %}
@@ -214,5 +255,16 @@
             </div>
         </div>
     </div>
+
+    <script>
+        // Traduction automatique des timestamps du tableau en heure locale
+        document.querySelectorAll('.local-timestamp').forEach(el => {
+            let utcStr = el.getAttribute('data-utc');
+            let d = parseUtcToLocal(utcStr);
+            if (!isNaN(d.getTime())) {
+                el.innerText = d.toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }
+        });
+    </script>
 </body>
 </html>

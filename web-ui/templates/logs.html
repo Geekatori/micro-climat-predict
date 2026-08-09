@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>micro-climat-predict - Historique des Opérations</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Fonction utilitaire globale de conversion UTC -> Local
+        function parseUtcToLocal(dateStr) {
+            if (!dateStr) return null;
+            let isoStr = dateStr.includes('Z') || dateStr.includes('+') ? dateStr : dateStr.replace(' ', 'T') + 'Z';
+            return new Date(isoStr);
+        }
+    </script>
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
     <!-- Header / Navbar unifiée -->
@@ -14,14 +22,14 @@
         <!-- Collection Logs Table -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow overflow-hidden">
             <div class="px-6 py-4 border-b border-gray-700">
-                <h2 class="text-lg font-medium text-white">🔄 Historique des Collectes de Données</h2>
+                <h2 class="text-lg font-medium text-white">🔄 Historique des Collectes de Données (Heure Locale)</h2>
             </div>
             <div class="overflow-x-auto max-h-[400px]">
                 <table class="w-full text-left border-collapse">
                     <thead>
                         <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider sticky top-0">
                             <th class="px-6 py-3">ID</th>
-                            <th class="px-6 py-3">Horodatage (UTC)</th>
+                            <th class="px-6 py-3">Horodatage (Paris)</th>
                             <th class="px-6 py-3">Jours demandés</th>
                             <th class="px-6 py-3">Lignes traitées</th>
                             <th class="px-6 py-3">Statut</th>
@@ -32,7 +40,9 @@
                         {% for log in collection_logs %}
                         <tr class="hover:bg-gray-750 transition">
                             <td class="px-6 py-3 font-mono text-xs">{{ log.id }}</td>
-                            <td class="px-6 py-3 whitespace-nowrap">{{ log.timestamp }}</td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                <span class="local-timestamp" data-utc="{{ log.timestamp }}">{{ log.timestamp }}</span>
+                            </td>
                             <td class="px-6 py-3">{{ log.days_fetched }} jours</td>
                             <td class="px-6 py-3">{{ log.rows_processed }}</td>
                             <td class="px-6 py-3">
@@ -57,14 +67,14 @@
         <!-- Training Logs Table -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-gray-700">
-                <h2 class="text-lg font-medium text-white">🧠 Historique des Entraînements du Modèle</h2>
+                <h2 class="text-lg font-medium text-white">🧠 Historique des Entraînements du Modèle (Heure Locale)</h2>
             </div>
             <div class="overflow-x-auto max-h-[400px]">
                 <table class="w-full text-left border-collapse">
                     <thead>
                         <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider sticky top-0">
                             <th class="px-6 py-3">ID</th>
-                            <th class="px-6 py-3">Horodatage (UTC)</th>
+                            <th class="px-6 py-3">Horodatage (Paris)</th>
                             <th class="px-6 py-3">Lignes Ext.</th>
                             <th class="px-6 py-3">Lignes Int.</th>
                             <th class="px-6 py-3">RMSE Ext.</th>
@@ -77,7 +87,9 @@
                         {% for log in training_logs %}
                         <tr class="hover:bg-gray-750 transition">
                             <td class="px-6 py-3 font-mono text-xs">{{ log.id }}</td>
-                            <td class="px-6 py-3 whitespace-nowrap">{{ log.timestamp }}</td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                <span class="local-timestamp" data-utc="{{ log.timestamp }}">{{ log.timestamp }}</span>
+                            </td>
                             <td class="px-6 py-3">{{ log.rows_ext }}</td>
                             <td class="px-6 py-3">{{ log.rows_int }}</td>
                             <td class="px-6 py-3 font-mono text-xs">{{ log.rmse_ext if log.rmse_ext is not none else 'N/A' }}</td>
@@ -101,5 +113,16 @@
             </div>
         </div>
     </div>
+
+    <script>
+        // Traduction automatique des timestamps des deux tableaux en heure locale
+        document.querySelectorAll('.local-timestamp').forEach(el => {
+            let utcStr = el.getAttribute('data-utc');
+            let d = parseUtcToLocal(utcStr);
+            if (!isNaN(d.getTime())) {
+                el.innerText = d.toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }
+        });
+    </script>
 </body>
 </html>
