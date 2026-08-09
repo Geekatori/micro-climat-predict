@@ -1,23 +1,23 @@
-<div class="grid grid-cols-3 gap-2 mb-2">
-    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
+<div class="grid grid-cols-3 gap-1.5 md:gap-4 mb-2">
+    <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
         <div>
-            <p class="text-xs text-gray-400">Extérieur</p>
-            <h3 id="val-ext" class="text-xl font-bold text-[#f39c12]">--°C</h3>
+            <p class="text-[10px] md:text-xs text-gray-400">Extérieur</p>
+            <h3 id="val-ext" class="text-base md:text-xl font-bold text-[#f39c12]">--°C</h3>
         </div>
-        <div id="peak-countdown" class="hidden text-[10px] bg-orange-500/20 text-orange-300 px-2 py-1 rounded-full border border-orange-500/30"></div>
+        <div id="peak-countdown" class="hidden text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded-full border border-orange-500/30"></div>
     </div>
-    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow">
-        <p class="text-xs text-gray-400">Couloir</p>
-        <h3 id="val-cor" class="text-xl font-bold text-[#3498db]">--°C</h3>
+    <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow">
+        <p class="text-[10px] md:text-xs text-gray-400">Couloir</p>
+        <h3 id="val-cor" class="text-base md:text-xl font-bold text-[#3498db]">--°C</h3>
     </div>
-    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow">
-        <p class="text-xs text-gray-400">Intérieur</p>
-        <h3 id="val-int" class="text-xl font-bold text-[#e74c3c]">--°C</h3>
+    <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow">
+        <p class="text-[10px] md:text-xs text-gray-400">Intérieur</p>
+        <h3 id="val-int" class="text-base md:text-xl font-bold text-[#e74c3c]">--°C</h3>
     </div>
 </div>
 
-<div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow flex-grow relative flex flex-col min-h-[500px]">
-    <div class="flex justify-between items-center mb-2">
+<div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex-grow relative flex flex-col min-h-[400px]">
+    <div class="flex justify-between items-center mb-1">
     </div>
     <div id="chart" class="w-full flex-grow"></div>
 </div>
@@ -115,14 +115,13 @@
                 let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
 
                 const styleMap = {
-                    'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },         // Rouge/Corail comme le badge Intérieur
-                    'Couloir': { color: '#3498db', width: 2, dash: 0 },           // Bleu comme le badge Couloir
-                    'Extérieur': { color: '#f39c12', width: 2, dash: 0 },         // Orange comme le badge Extérieur
-                    'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 },      // Gris neutre
-                    'Intérieur (Prévu)': { color: '#f87171', width: 2, dash: 5 }, // Dérivé rouge clair pour le prévu
-                    'Extérieur (Prévu)': { color: '#fbd38d', width: 2, dash: 5 }  // Dérivé orange clair pour le prévu
+                    'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },
+                    'Couloir': { color: '#3498db', width: 2, dash: 0 },
+                    'Extérieur': { color: '#f39c12', width: 2, dash: 0 },
+                    'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 },
+                    'Intérieur (Prévu)': { color: '#f87171', width: 2, dash: 5 },
+                    'Extérieur (Prévu)': { color: '#fbd38d', width: 2, dash: 5 }
                 };
-
 
                 let chartColors = [];
                 let strokeWidths = [];
@@ -245,9 +244,7 @@
                                     <div class="custom-tooltip-title">${dateStr}</div>`;
 
                                 w.globals.initialSeries.forEach((s, idx) => {
-                                    let color = w.globals.colors[idx];
                                     let val = '--';
-
                                     if (timestamp > nowTime && idx < 3) {
                                         val = '--';
                                     } else {
@@ -261,7 +258,6 @@
                                             }
                                         }
                                     }
-
                                 });
 
                                 html += `</div>`;
@@ -305,12 +301,6 @@
         border-bottom: 1px solid #333;
         padding-bottom: 4px;
         color: #ccc;
-    }
-    .custom-tooltip-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 15px;
-        margin-bottom: 3px;
     }
     .apexcharts-toolbar {
         margin-top: -15px;
