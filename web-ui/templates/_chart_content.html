@@ -212,6 +212,24 @@
             })
             .then(data => {
                 cachedData[apiVersion] = data;
+
+                // --- MISE À JOUR DYNAMIQUE DU TITRE DE L'ONGLET FIREFOX ---
+                let titleText = `Ext: ${data.current.ext}`;
+                if (mode === 'detailed') {
+                    titleText += ` | Couloir: ${data.current.cor} | Int: ${data.current.int}`;
+                } else {
+                    titleText += ` | Int: ${data.current.int}`;
+                }
+                document.title = titleText;
+                // -----------------------------------------------------------
+
+                const freshEl = document.getElementById('data-freshness');
+                if (freshEl && data.generated_at) {
+                    let d = new Date(data.generated_at);
+                    let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                    freshEl.innerText = `Données calculées à ${timeStr}`;
+                    freshEl.style.display = 'block';
+                }
                 processAndRenderChart(data);
             })
             .catch(err => console.error("Error loading data:", err));
