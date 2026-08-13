@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>micro-climat-predict - Validation des Erreurs</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Chart.js et ses dépendances nécessaires pour l'axe temporel et le zoom -->
     <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/min/moment.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js"></script>
@@ -16,19 +15,31 @@
     {% include 'navbar.html' %}
 
     <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
-        <!-- En-tête et Sélecteur de modèle -->
+        <!-- En-tête et Sélecteurs -->
         <div class="flex flex-col md:flex-row justify-between items-center bg-gray-800 p-5 rounded-xl border border-gray-700 shadow gap-4">
             <div>
                 <h1 class="text-lg font-medium text-white">Analyse des Écarts (Mesure - Inférence)</h1>
-                <p class="text-xs text-gray-400">Évaluation de la précision du modèle sélectionné</p>
+                <p class="text-xs text-gray-400">Évaluation de la précision selon les états thermiques (4 Modes)</p>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
-                <a href="/validation/error?model=ext" class="px-4 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'ext' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
-                    Modèle Extérieur
+                <!-- 1. Mode Extérieur -->
+                <a href="/validation/error?model=ext" class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'ext' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
+                    Extérieur
                 </a>
-                <a href="/validation/error?model=int" class="px-4 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'int' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
-                    Modèle Intérieur
-                </a>
+
+                <!-- 2 & 3. Modes Intérieur (Fermé / Ouvert) visibles si on est sur le modèle int -->
+                <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-xs font-medium ml-2">
+                    <a href="/validation/error?model=int" class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'int' and current_filter == 'all' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
+                        Intérieur (Tous)
+                    </a>
+                    <a href="/validation/error?model=int&filter=int_closed" class="px-2.5 py-1 rounded-md transition {% if current_model == 'int' and current_filter == 'int_closed' %}bg-purple-600 text-white font-bold{% else %}text-gray-400 hover:text-white{% endif %}">
+                        Int. (Fermé)
+                    </a>
+                    <a href="/validation/error?model=int&filter=int_open" class="px-2.5 py-1 rounded-md transition {% if current_model == 'int' and current_filter == 'int_open' %}bg-purple-600 text-white font-bold{% else %}text-gray-400 hover:text-white{% endif %}">
+                        Int. (Ouvert)
+                    </a>
+                </div>
+
                 <button onclick="window.errorChart.resetZoom()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow border border-gray-600 ml-2">
                     🔍 Reset Zoom
                 </button>
@@ -51,6 +62,14 @@
             </div>
         </div>
 
+        <!-- Légende explicative détaillée -->
+        <div class="flex items-center gap-4 text-xs text-gray-300 bg-gray-800/50 px-4 py-2 rounded-lg border border-gray-700/50 flex-wrap">
+            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-emerald-500/70 inline-block"></span> Erreur &lt; 0.5°C (Fermé)</span>
+            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-sky-400/80 inline-block"></span> Mode 3 : Rafraîchissement actif (Ouvert)</span>
+            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-amber-500/80 inline-block"></span> Mode 2 : Anomalie/Courant d'air chaud</span>
+            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-red-500/70 inline-block"></span> Erreur &gt; 1.5°C (Fermé)</span>
+        </div>
+
         <!-- Graphique Histogramme des Erreurs -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6 flex-grow flex flex-col">
             <div class="relative h-[450px] w-full flex-grow">
@@ -64,21 +83,24 @@
         if (payload && payload.timestamps && payload.timestamps.length > 0) {
             const ctx = document.getElementById('errorChart').getContext('2d');
 
-            // Formatage des données sous forme de paires {x: timestamp, y: erreur}
             const dataPoints = payload.timestamps.map((ts, idx) => ({
                 x: new Date(ts).getTime(),
-                y: payload.errors[idx]
+                y: payload.errors[idx],
+                windowOpen: payload.window_open ? payload.window_open[idx] : 0,
+                thermalMode: payload.thermal_mode ? payload.thermal_mode[idx] : 4
             }));
 
-            // Couleurs dynamiques (Vert -> Jaune -> Rouge)
-            const backgroundColors = payload.errors.map(err => {
-                let absErr = Math.abs(err);
-                if (absErr < 0.5) return 'rgba(16, 185, 129, 0.7)';
-                if (absErr < 1.5) return 'rgba(234, 179, 8, 0.7)';
-                return 'rgba(239, 68, 68, 0.7)';
+            // Couleurs basées sur le mode thermique (Ouvert) ou sur l'erreur (Fermé)
+            const backgroundColors = dataPoints.map(pt => {
+                if (pt.thermalMode === 3) return 'rgba(56, 189, 248, 0.8)'; // Bleu ciel pour le rafraîchissement
+                if (pt.thermalMode === 2) return 'rgba(245, 158, 11, 0.8)'; // Ambre pour l'anomalie ouverte à chaud
+
+                let absErr = Math.abs(pt.y);
+                if (absErr < 0.5) return 'rgba(16, 185, 129, 0.7)'; // Vert
+                if (absErr < 1.5) return 'rgba(234, 179, 8, 0.7)';  // Jaune
+                return 'rgba(239, 68, 68, 0.7)';                    // Rouge
             });
 
-            // Génération automatique de lignes de repère verticales pour chaque minuit (changement de jour)
             let annotations = {};
             if (dataPoints.length > 0) {
                 let minTime = dataPoints[0].x;
@@ -112,6 +134,13 @@
                 }
             }
 
+            const modeDescriptions = {
+                1: "1 (Inertie face à la chaleur)",
+                2: "2 (Anomalie d'aération chaude)",
+                3: "3 (Rafraîchissement actif)",
+                4: "4 (Équilibre / Fenêtres fermées)"
+            };
+
             window.errorChart = new Chart(ctx, {
                 type: 'bar',
                 data: {
@@ -131,6 +160,16 @@
                         zoom: {
                             pan: { enabled: true, mode: 'x', speed: 20 },
                             zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x' }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = ` Erreur : ${context.raw.y} °C`;
+                                    let modeStr = modeDescriptions[context.raw.thermalMode] || context.raw.thermalMode;
+                                    label += ` | Mode : ${modeStr}`;
+                                    return label;
+                                }
+                            }
                         }
                     },
                     scales: {
@@ -139,9 +178,7 @@
                             time: {
                                 unit: 'hour',
                                 stepSize: 3,
-                                displayFormats: {
-                                    hour: 'HH:mm'
-                                }
+                                displayFormats: { hour: 'HH:mm' }
                             },
                             grid: { color: 'rgba(255, 255, 255, 0.05)' },
                             ticks: { color: '#9ca3af' }

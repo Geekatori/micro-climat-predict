@@ -6,7 +6,8 @@
     <!-- Barre d'outils supérieure avec les switches natifs HTML -->
     <div class="flex flex-wrap justify-between items-center mb-3 gap-2 pb-2 border-b border-gray-700/60">
         <div class="text-xs font-semibold text-gray-300">Contrôles du graphique</div>
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
+
             <!-- Switch ML (Passé / Futur) -->
             <label class="relative inline-flex items-center cursor-pointer select-none">
                 <input type="checkbox" id="switch-ml" class="sr-only peer">
@@ -22,7 +23,7 @@
             </label>
 
             <!-- Curseur à 3 positions (Zoom ±4h / 24h / 7 Jours) -->
-            <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-[11px] font-medium">
+            <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-[11px] font-medium ml-auto">
                 <button type="button" onclick="setZoomMode('zoom4h')" id="btn-zoom-4h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">±4h</button>
                 <button type="button" onclick="setZoomMode('24h')" id="btn-zoom-24h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">24h</button>
                 <button type="button" onclick="setZoomMode('7d')" id="btn-zoom-7d" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">7j</button>
@@ -57,7 +58,7 @@
     // Écouteurs globaux
     document.getElementById('switch-ml').addEventListener('change', (e) => {
         mlMode = e.target.checked ? 'eval' : 'forecast';
-        cachedData = { '24h': null, '7d': null }; // Invalide le cache si le mode ML change
+        cachedData = { '24h': null, '7d': null };
         updateUrlState();
         loadData();
     });
@@ -213,7 +214,6 @@
             .then(data => {
                 cachedData[apiVersion] = data;
 
-                // --- MISE À JOUR DYNAMIQUE DU TITRE DE L'ONGLET FIREFOX ---
                 let titleText = `Ext: ${data.current.ext}`;
                 if (mode === 'detailed') {
                     titleText += ` | Couloir: ${data.current.cor} | Int: ${data.current.int}`;
@@ -221,7 +221,6 @@
                     titleText += ` | Int: ${data.current.int}`;
                 }
                 document.title = titleText;
-                // -----------------------------------------------------------
 
                 const freshEl = document.getElementById('data-freshness');
                 if (freshEl && data.generated_at) {
@@ -262,10 +261,13 @@
             maxTime = now + windowMs * 2;
         }
 
+        // Intégration propre des deux courbes d'intérieur (Confinement vs Aération) tout en gardant l'historique complet
         const styleMap = {
             'Intérieur min': { color: '#a855f7', width: 2, dash: 0 },
-            'Intérieur min (prévu)': { color: '#a855f7', width: 2, dash: 5 },
-            'Intérieur min (ML passé)': { color: '#a855f7', width: 2, dash: 5 },
+            'Intérieur min (Confinement)': { color: '#64748b', width: 2, dash: 5 }, // Gris/Bleu pointillé pour le confinement
+            'Intérieur min (Aération)': { color: '#38bdf8', width: 2, dash: 0 },    // Bleu ciel plein pour l'aération
+            'Intérieur min (Confinement passé)': { color: '#64748b', width: 2, dash: 5 },
+            'Intérieur min (Aération passé)': { color: '#38bdf8', width: 2, dash: 0 },
             'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },
             'Couloir': { color: '#3498db', width: 2, dash: 0 },
             'Extérieur': { color: '#f39c12', width: 2, dash: 0 },

@@ -26,47 +26,9 @@ ENTITIES = {
     "int_hum": "sensor.0x8c73dafffeda02b5_humidity",
     "cor_temp": "sensor.temtop_c1plus_temtop_temperature",
     "cor_hum": "sensor.temtop_c1plus_temtop_humidity",
+    "co2": "sensor.temtop_c1plus_temtop_co2",
     "int_temp_min": "sensor.temperature_interieure_min"
 }
-
-def backfill_missing_int_temp_min(conn):
-    """
-    Checks if there are rows where int_temp_min is missing but source temperatures exist.
-    If so, updates all missing rows historically.
-    Uses an existing database connection to avoid SQLite database locks.
-    """
-    cursor = conn.cursor()
-
-    try:
-        # Check if at least one row needs to be updated
-        cursor.execute("""
-            SELECT 1 FROM metrics
-            WHERE int_temp_min IS NULL
-            AND (int_temp IS NOT NULL OR cor_temp IS NOT NULL)
-            LIMIT 1
-        """)
-        needs_update = cursor.fetchone()
-
-        if needs_update:
-            print(f"[{datetime.now()}] Auto-healing: Missing int_temp_min detected. Backfilling data...")
-
-            # We use a CASE statement because SQLite MIN(a, b) returns NULL if either a or b is NULL
-            cursor.execute("""
-                UPDATE metrics
-                SET int_temp_min = CASE
-                    WHEN int_temp IS NOT NULL AND cor_temp IS NOT NULL THEN MIN(int_temp, cor_temp)
-                    WHEN int_temp IS NOT NULL THEN int_temp
-                    WHEN cor_temp IS NOT NULL THEN cor_temp
-                    ELSE NULL
-                END
-                WHERE int_temp_min IS NULL
-                AND (int_temp IS NOT NULL OR cor_temp IS NOT NULL)
-            """)
-
-            print(f"[{datetime.now()}] Auto-healing complete. Updated {cursor.rowcount} rows.")
-    except sqlite3.OperationalError as e:
-        print(f"[{datetime.now()}] Auto-healing skipped (table might not be ready): {e}")
-
 
 def migrate_db(conn):
     cursor = conn.cursor()
@@ -78,13 +40,16 @@ def migrate_db(conn):
         conn.execute("ALTER TABLE metrics ADD COLUMN int_temp_min REAL")
         print("Migration: Added 'int_temp_min' column to metrics table.")
 
-    # Pass the existing connection instead of opening a new one
-    backfill_missing_int_temp_min(conn)
+    # Add co2 column if it does not exist
+    if "co2" not in columns:
+        conn.execute("ALTER TABLE metrics ADD COLUMN co2 REAL")
+        print("Migration: Added 'co2' column to metrics table.")
+
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    # Table historique sans le soleil
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS metrics (
             timestamp TEXT PRIMARY KEY,
@@ -94,9 +59,11 @@ def init_db():
             int_hum REAL,
             cor_temp REAL,
             cor_hum REAL,
+            co2 REAL,
             meteo_temp REAL,
             meteo_hum REAL,
-            wind_speed REAL
+            wind_speed REAL,
+            int_temp_min REAL
         )
     """)
     conn.execute("""
@@ -197,7 +164,6 @@ async def fetch_weather_data_days(days: int):
             except Exception as e:
                 print(f"[{datetime.now()}] Open-Meteo exception on attempt {attempt + 1}: {e}")
 
-            # Wait before retrying if attempts remain
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
 
@@ -220,6 +186,7 @@ async def run_collection():
             if data:
                 df = pd.DataFrame(data, columns=["timestamp", key])
                 df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
+                # Resample individuel par capteur avec interpolation et ffill/bfill
                 dfs_past.append(df.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill())
 
         if meteo_past_points:
@@ -229,7 +196,10 @@ async def run_collection():
             dfs_past.append(df_meteo_past)
 
         if dfs_past:
-            final_past_df = pd.concat(dfs_past, axis=1).reset_index()
+            # Concaténation globale et propagation propre de la dernière valeur pour chaque capteur (pas de croisement)
+            final_past_df = pd.concat(dfs_past, axis=1)
+            final_past_df = final_past_df.ffill().bfill().reset_index()
+
             numeric_cols_past = final_past_df.select_dtypes(include=["number"]).columns
             final_past_df[numeric_cols_past] = final_past_df[numeric_cols_past].round(2)
 
@@ -240,24 +210,24 @@ async def run_collection():
             conn.execute("""
                 INSERT INTO metrics (
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed, int_temp_min
+                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, int_temp_min
                 )
                 SELECT
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed, int_temp_min
+                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, int_temp_min
                 FROM metrics_temp
-                WHERE true
                 ON CONFLICT(timestamp) DO UPDATE SET
-                    ext_temp = COALESCE(metrics.ext_temp, excluded.ext_temp),
-                    ext_hum = COALESCE(metrics.ext_hum, excluded.ext_hum),
-                    int_temp = COALESCE(metrics.int_temp, excluded.int_temp),
-                    int_hum = COALESCE(metrics.int_hum, excluded.int_hum),
-                    cor_temp = COALESCE(metrics.cor_temp, excluded.cor_temp),
-                    cor_hum = COALESCE(metrics.cor_hum, excluded.cor_hum),
-                    meteo_temp = COALESCE(metrics.meteo_temp, excluded.meteo_temp),
-                    meteo_hum = COALESCE(metrics.meteo_hum, excluded.meteo_hum),
-                    wind_speed = COALESCE(metrics.wind_speed, excluded.wind_speed),
-                    int_temp_min = COALESCE(metrics.int_temp_min, excluded.int_temp_min, MIN(excluded.cor_temp, excluded.int_temp));
+                    ext_temp = COALESCE(excluded.ext_temp, metrics.ext_temp),
+                    ext_hum = COALESCE(excluded.ext_hum, metrics.ext_hum),
+                    int_temp = COALESCE(excluded.int_temp, metrics.int_temp),
+                    int_hum = COALESCE(excluded.int_hum, metrics.int_hum),
+                    cor_temp = COALESCE(excluded.cor_temp, metrics.cor_temp),
+                    cor_hum = COALESCE(excluded.cor_hum, metrics.cor_hum),
+                    co2 = COALESCE(excluded.co2, metrics.co2),
+                    meteo_temp = COALESCE(excluded.meteo_temp, metrics.meteo_temp),
+                    meteo_hum = COALESCE(excluded.meteo_hum, metrics.meteo_hum),
+                    wind_speed = COALESCE(excluded.wind_speed, metrics.wind_speed),
+                    int_temp_min = COALESCE(excluded.int_temp_min, metrics.int_temp_min);
             """)
             conn.execute("DROP TABLE metrics_temp")
             conn.commit()

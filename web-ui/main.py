@@ -47,8 +47,25 @@ async def admin_dashboard(request: Request):
 
     if db_exists:
         try:
+            # 1. Récupération des métriques annotées directement depuis l'API du ml-engine
+            df_metrics = pd.DataFrame()
+            async with httpx.AsyncClient() as client:
+                try:
+                    resp_annotated = await client.get(f"{ML_ENGINE_URL}/api/metrics/annotated", timeout=10.0)
+                    if resp_annotated.status_code == 200:
+                        data_list = resp_annotated.json().get("data", [])
+                        df_metrics = pd.DataFrame(data_list)
+                except Exception as e:
+                    print(f"ML Engine Annotated Metrics unreachable, falling back to local DB: {e}")
+
+            # Fallback local direct si le ml-engine est injoignable
+            if df_metrics.empty:
+                conn = sqlite3.connect(DB_PATH)
+                df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
+                conn.close()
+
+            # Récupération des prévisions météo pour fusion
             conn = sqlite3.connect(DB_PATH)
-            df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
             try:
                 df_forecasts = pd.read_sql("SELECT * FROM weather_forecasts ORDER BY timestamp ASC", conn)
             except:
@@ -80,48 +97,63 @@ async def admin_dashboard(request: Request):
                 now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
                 df["dt"] = pd.to_datetime(df["timestamp"])
 
-                forecast_ext_dict, forecast_int_dict = {}, {}
-                try:
-                    async with httpx.AsyncClient() as client:
+                forecast_ext_dict, forecast_int_closed_dict, forecast_int_open_dict = {}, {}, {}
+                async with httpx.AsyncClient() as client:
+                    try:
                         resp_ext = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext", timeout=5.0)
                         if resp_ext.status_code == 200:
                             for item in resp_ext.json().get("forecasts", []):
                                 forecast_ext_dict[item["timestamp"]] = item["predicted_ext_temp"]
-                except Exception as e:
-                    print(f"ML Ext Forecast unreachable: {e}")
+                    except Exception as e:
+                        print(f"ML Ext Forecast unreachable: {e}")
 
-                try:
-                    async with httpx.AsyncClient() as client:
-                        resp_int = await client.get(f"{ML_ENGINE_URL}/api/forecast/int", timeout=5.0)
-                        if resp_int.status_code == 200:
-                            for item in resp_int.json().get("forecasts", []):
-                                forecast_int_dict[item["timestamp"]] = item["predicted_int_temp_min"]
-                except Exception as e:
-                    print(f"ML Int Forecast unreachable: {e}")
+                    try:
+                        resp_int_closed = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=0", timeout=5.0)
+                        if resp_int_closed.status_code == 200:
+                            for item in resp_int_closed.json().get("forecasts", []):
+                                forecast_int_closed_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+                    except Exception as e:
+                        print(f"ML Int Closed Forecast unreachable: {e}")
+
+                    try:
+                        resp_int_open = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=1", timeout=5.0)
+                        if resp_int_open.status_code == 200:
+                            for item in resp_int_open.json().get("forecasts", []):
+                                forecast_int_open_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+                    except Exception as e:
+                        print(f"ML Int Open Forecast unreachable: {e}")
 
                 df["predicted_ext_temp"] = df["timestamp"].map(forecast_ext_dict)
-                df["predicted_int_temp_min"] = df["timestamp"].map(forecast_int_dict)
+                df["predicted_int_temp_closed"] = df["timestamp"].map(forecast_int_closed_dict)
+                df["predicted_int_temp_open"] = df["timestamp"].map(forecast_int_open_dict)
 
                 df["ext_temp_pred_past"] = df.apply(lambda r: r["predicted_ext_temp"] if r["dt"] <= now_dt else None, axis=1)
-                df["int_temp_min_pred_past"] = df.apply(lambda r: r["predicted_int_temp_min"] if r["dt"] <= now_dt else None, axis=1)
+                df["int_temp_min_pred_past"] = df.apply(lambda r: r["predicted_int_temp_closed"] if r["dt"] <= now_dt else None, axis=1)
 
                 df["ext_temp_forecast_mode"] = df.apply(lambda r: r["ext_temp"] if r["dt"] <= now_dt else r["predicted_ext_temp"], axis=1)
-                df["int_temp_min_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_min"], axis=1)
+                df["int_temp_closed_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_closed"], axis=1)
+                df["int_temp_open_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_open"], axis=1)
 
                 for col in ["meteo_temp", "meteo_hum", "wind_speed"]:
                     if col in df.columns:
                         df[f"{col}_past"] = df.apply(lambda row: row[col] if row["dt"] <= now_dt else None, axis=1)
                         df[f"{col}_forecast"] = df.apply(lambda row: row[col] if row["dt"] > now_dt else None, axis=1)
 
+                # S'assurer que le DataFrame possède la colonne window_open_flag (provenant de l'API annotée)
+                if "window_open_flag" not in df.columns:
+                    df["window_open_flag"] = 0
+
                 chart_data_payload = {
                     "timestamps": df["timestamp"].tolist(),
                     "ext_temp": df["ext_temp"].tolist() if "ext_temp" in df else [],
                     "int_temp_min": df["int_temp_min"].tolist() if "int_temp_min" in df else [],
                     "cor_temp": df["cor_temp"].tolist() if "cor_temp" in df else [],
+                    "co2": df["co2"].tolist() if "co2" in df else [],
                     "ext_temp_pred_past": df["ext_temp_pred_past"].tolist(),
                     "int_temp_min_pred_past": df["int_temp_min_pred_past"].tolist(),
                     "ext_temp_forecast_mode": df["ext_temp_forecast_mode"].tolist(),
-                    "int_temp_min_forecast_mode": df["int_temp_min_forecast_mode"].tolist(),
+                    "int_temp_closed_forecast_mode": df["int_temp_closed_forecast_mode"].tolist(),
+                    "int_temp_open_forecast_mode": df["int_temp_open_forecast_mode"].tolist(),
                     "meteo_temp_past": df["meteo_temp_past"].tolist() if "meteo_temp_past" in df else [],
                     "meteo_temp_forecast": df["meteo_temp_forecast"].tolist() if "meteo_temp_forecast" in df else [],
                     "meteo_hum_past": df["meteo_hum_past"].tolist() if "meteo_hum_past" in df else [],
@@ -133,11 +165,12 @@ async def admin_dashboard(request: Request):
                     "cor_hum": df["cor_hum"].tolist() if "cor_hum" in df else [],
                     "meteo_temp": df["meteo_temp"].tolist() if "meteo_temp" in df else [],
                     "meteo_hum": df["meteo_hum"].tolist() if "meteo_hum" in df else [],
-                    "wind_speed": df["wind_speed"].tolist() if "wind_speed" in df else []
+                    "wind_speed": df["wind_speed"].tolist() if "wind_speed" in df else [],
+                    "window_open_flag": df["window_open_flag"].fillna(0).astype(int).tolist()
                 }
 
-                drop_cols = [c for c in ["dt", "predicted_ext_temp", "predicted_int_temp_min", "ext_temp_pred_past", "int_temp_min_pred_past", "ext_temp_forecast_mode", "int_temp_min_forecast_mode"] if c in df_metrics.columns]
-                df_tail = df_metrics.drop(columns=drop_cols, errors="ignore").tail(50).sort_values(by="timestamp", ascending=False)
+                drop_cols = [c for c in ["dt", "predicted_ext_temp", "predicted_int_temp_closed", "predicted_int_temp_open", "ext_temp_pred_past", "int_temp_min_pred_past", "ext_temp_forecast_mode", "int_temp_closed_forecast_mode", "int_temp_open_forecast_mode", "is_fit_ready", "thermal_mode"] if c in df.columns]
+                df_tail = df.drop(columns=drop_cols, errors="ignore").tail(50).sort_values(by="timestamp", ascending=False)
                 records = df_tail.to_dict(orient="records")
                 columns = list(df_tail.columns)
 
@@ -242,22 +275,19 @@ async def main_dashboard_widget(request: Request):
     return templates.TemplateResponse(request, "widget.html")
 
 @app.get("/api-meteo/data/{version}")
-async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "forecast"):
+async def get_apex_metrics(request: Request, version: str, mode: str = "simple", ml: str = "forecast"):
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     hours_back = 24 if version == '24h' else (7 * 24)
     start_time = now_utc - timedelta(hours=hours_back)
     end_time = now_utc + timedelta(days=7 if version == '7d' else 2)
 
-    # HA fetch window: only the last 1 hour to get real-time data between cron jobs
     ha_fetch_start = now_utc - timedelta(hours=1)
     if ha_fetch_start < start_time:
         ha_fetch_start = start_time
 
-    # Formatting dates for SQLite queries
     start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
     ha_start_str_db = ha_fetch_start.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Formatting dates for HA API
     ha_start_str_api = ha_fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_str_api = end_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -273,12 +303,10 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
 
     ha_data_dict = {key: [] for key in current_entities.keys()}
     meteo_points = []
-    forecast_ext_dict, forecast_int_dict = {}, {}
+    forecast_ext_dict, forecast_int_closed_dict, forecast_int_open_dict = {}, {}, {}
 
-    # 1. Fetch Historical Data from SQLite (Fast load for the bulk of the graph)
     try:
         conn_db = sqlite3.connect(DB_PATH)
-        # We strictly cut off the DB query at 'ha_start_str_db' to avoid overlapping with HA real-time data
         df_metrics = pd.read_sql(
             f"SELECT timestamp, ext_temp, int_temp_min, cor_temp, int_temp "
             f"FROM metrics "
@@ -299,7 +327,6 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
     except Exception as e:
         print(f"DB Metrics Error: {e}")
 
-    # 2. Fetch Real-time Data from Home Assistant (Last 1 hour) & Open-Meteo / ML
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:
             url_ha = f"{HA_URL}/api/history/period/{ha_start_str_api}?filter_entity_id={entities_filter}&end_time={end_str_api}"
@@ -321,7 +348,6 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
         except Exception as e:
             print(f"HA Direct API Error: {e}")
 
-        # Fetch Open-Meteo history and forecasts from DB (Met_temp doesn't need real-time)
         try:
             df_m_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
             try:
@@ -345,9 +371,8 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
         except Exception as e:
             print(f"Meteo DB Error: {e}")
         finally:
-            conn_db.close() # Safely close DB connection
+            conn_db.close()
 
-        # Fetch ML Engine forecasts
         try:
             resp_ext = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext")
             if resp_ext.status_code == 200:
@@ -357,14 +382,21 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
             print(f"ML Ext Forecast unreachable: {e}")
 
         try:
-            resp_int = await client.get(f"{ML_ENGINE_URL}/api/forecast/int")
-            if resp_int.status_code == 200:
-                for item in resp_int.json().get("forecasts", []):
-                    forecast_int_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+            resp_closed = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=0")
+            if resp_closed.status_code == 200:
+                for item in resp_closed.json().get("forecasts", []):
+                    forecast_int_closed_dict[item["timestamp"]] = item["predicted_int_temp_min"]
         except Exception as e:
-            print(f"ML Int Forecast unreachable: {e}")
+            print(f"ML Int Closed Forecast unreachable: {e}")
 
-    # Helper function to sort and format timestamps for ApexCharts
+        try:
+            resp_open = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=1")
+            if resp_open.status_code == 200:
+                for item in resp_open.json().get("forecasts", []):
+                    forecast_int_open_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+        except Exception as e:
+            print(f"ML Int Open Forecast unreachable: {e}")
+
     def format_series(points_list):
         series = []
         for dt, val in sorted(points_list, key=lambda x: x[0]):
@@ -372,11 +404,11 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
             series.append([ts_ms, val])
         return series
 
-    sim_ext_points, sim_int_points = [], []
+    sim_ext_points, sim_int_closed_points, sim_int_open_points = [], [], []
+
     for ts_str, val in forecast_ext_dict.items():
         try:
             dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-            # Logic switch based on 'ml' mode
             if ml == "eval":
                 if start_time <= dt <= now_utc:
                     sim_ext_points.append((dt, float(val)))
@@ -385,18 +417,28 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
                     sim_ext_points.append((dt, float(val)))
         except: pass
 
-    for ts_str, val in forecast_int_dict.items():
+    for ts_str, val in forecast_int_closed_dict.items():
         try:
             dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
             if ml == "eval":
                 if start_time <= dt <= now_utc:
-                    sim_int_points.append((dt, float(val)))
+                    sim_int_closed_points.append((dt, float(val)))
             else:
                 if dt > now_utc and dt <= end_time:
-                    sim_int_points.append((dt, float(val)))
+                    sim_int_closed_points.append((dt, float(val)))
         except: pass
 
-    # Get the latest valid reading for the dashboard cards
+    for ts_str, val in forecast_int_open_dict.items():
+        try:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            if ml == "eval":
+                if start_time <= dt <= now_utc:
+                    sim_int_open_points.append((dt, float(val)))
+            else:
+                if dt > now_utc and dt <= end_time:
+                    sim_int_open_points.append((dt, float(val)))
+        except: pass
+
     def get_last_val(key):
         valid = [v for dt, v in ha_data_dict.get(key, []) if dt <= now_utc]
         return f"{valid[-1]}°C" if valid else "--°C"
@@ -415,12 +457,14 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
         }
 
     ext_pred_name = "Extérieur (prévu)" if ml == "forecast" else "Extérieur (ML passé)"
-    int_pred_name = "Intérieur min (prévu)" if ml == "forecast" else "Intérieur min (ML passé)"
+    int_closed_name = "Intérieur min (Confinement)" if ml == "forecast" else "Intérieur min (Confinement passé)"
+    int_open_name = "Intérieur min (Aération)" if ml == "forecast" else "Intérieur min (Aération passé)"
 
     series_data = [
         {"name": "Extérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["ext_temp"] if dt <= now_utc])},
         {"name": ext_pred_name, "data": format_series(sim_ext_points)},
-        {"name": int_pred_name, "data": format_series(sim_int_points)},
+        {"name": int_closed_name, "data": format_series(sim_int_closed_points)},
+        {"name": int_open_name, "data": format_series(sim_int_open_points)},
         {"name": "Open-Meteo", "data": meteo_points}
     ]
 
@@ -442,17 +486,28 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
     }
 
 @app.get("/validation/error", response_class=HTMLResponse)
-async def validation_error_page(request: Request, model: str = "ext"):
-    """Affiche une vue histogramme de l'erreur (Mesure - Inférence) pour un modèle donné."""
+async def validation_error_page(request: Request, model: str = "ext", filter: str = "all"):
     db_exists = os.path.exists(DB_PATH)
     chart_payload = {}
     metrics_summary = {"mean_error": "N/A", "mae": "N/A", "rmse": "N/A"}
 
     if db_exists:
         try:
-            conn = sqlite3.connect(DB_PATH)
-            df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
-            conn.close()
+            # 1. Récupération des métriques annotées directement depuis l'API du ml-engine
+            df_metrics = pd.DataFrame()
+            async with httpx.AsyncClient() as client:
+                try:
+                    resp_annotated = await client.get(f"{ML_ENGINE_URL}/api/metrics/annotated", timeout=10.0)
+                    if resp_annotated.status_code == 200:
+                        data_list = resp_annotated.json().get("data", [])
+                        df_metrics = pd.DataFrame(data_list)
+                except Exception as e:
+                    print(f"ML Engine Annotated Metrics unreachable, falling back to local DB: {e}")
+
+            if df_metrics.empty:
+                conn = sqlite3.connect(DB_PATH)
+                df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
+                conn.close()
 
             if not df_metrics.empty:
                 forecast_dict = {}
@@ -472,18 +527,33 @@ async def validation_error_page(request: Request, model: str = "ext"):
                     df_valid = df_metrics.dropna(subset=[col_name, "pred"]).copy()
 
                     if not df_valid.empty:
-                        df_valid["error"] = df_valid[col_name] - df_valid["pred"]
+                        # Utilisation directe du window_open_flag propre fourni par le ml-engine
+                        if "window_open_flag" in df_valid.columns:
+                            df_valid["window_open"] = df_valid["window_open_flag"]
+                        else:
+                            df_valid["window_open"] = 0
 
-                        errors = df_valid["error"]
-                        metrics_summary["mean_error"] = round(errors.mean(), 2)
-                        metrics_summary["mae"] = round(errors.abs().mean(), 2)
-                        metrics_summary["rmse"] = round(np.sqrt((errors ** 2).mean()), 2)
+                        if model == "int":
+                            if filter == "int_open":
+                                df_valid = df_valid[df_valid["window_open"] == 1]
+                            elif filter == "int_closed":
+                                df_valid = df_valid[df_valid["window_open"] == 0]
 
-                        chart_payload = {
-                            "timestamps": df_valid["timestamp"].tolist(),
-                            "errors": df_valid["error"].round(2).tolist(),
-                            "model": model
-                        }
+                        if not df_valid.empty:
+                            df_valid["error"] = df_valid[col_name] - df_valid["pred"]
+
+                            errors = df_valid["error"]
+                            metrics_summary["mean_error"] = round(float(errors.mean()), 2)
+                            metrics_summary["mae"] = round(float(errors.abs().mean()), 2)
+                            metrics_summary["rmse"] = round(float(np.sqrt((errors ** 2).mean())), 2)
+
+                            chart_payload = {
+                                "timestamps": df_valid["timestamp"].tolist(),
+                                "errors": df_valid["error"].round(2).tolist(),
+                                "window_open": df_valid["window_open"].tolist(),
+                                "thermal_mode": df_valid["thermal_mode"].tolist() if "thermal_mode" in df_valid.columns else [],
+                                "model": model
+                            }
         except Exception as e:
             print(f"Error generating error validation view: {e}")
 
@@ -494,7 +564,74 @@ async def validation_error_page(request: Request, model: str = "ext"):
             "active_page": "validation",
             "db_exists": db_exists,
             "current_model": model,
+            "current_filter": filter,
             "metrics_summary": metrics_summary,
             "chart_payload": chart_payload
         }
     )
+
+@app.get("/api/backfill-co2")
+async def backfill_co2(days: int = 30):
+    co2_entity = "sensor.temtop_c1plus_temtop_co2"
+
+    if not os.path.exists(DB_PATH):
+        return {"status": "error", "message": "Database not found."}
+
+    async with httpx.AsyncClient() as client:
+        now_utc = datetime.now(timezone.utc)
+        start_time = now_utc - timedelta(days=days)
+        end_time = now_utc
+
+        ha_headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+        start_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        co2_points = []
+        try:
+            url = f"{HA_URL}/api/history/period/{start_str}?filter_entity_id={co2_entity}&end_time={end_str}"
+            ha_resp = await client.get(url, headers=ha_headers, timeout=60.0)
+
+            if ha_resp.status_code == 200:
+                history_data = ha_resp.json()
+                if history_data and len(history_data) > 0:
+                    for state in history_data[0]:
+                        try:
+                            dt = datetime.fromisoformat(state["last_updated"])
+                            val = float(state["state"])
+                            if not math.isnan(val) and not math.isinf(val):
+                                co2_points.append([dt, val])
+                        except:
+                            continue
+        except Exception as e:
+            return {"status": "error", "message": f"Erreur HA API: {str(e)}"}
+
+        if not co2_points:
+            return {"status": "success", "message": "Aucune donnée CO2 trouvée sur cette période."}
+
+        df_co2 = pd.DataFrame(co2_points, columns=["timestamp", "co2"])
+        df_co2["timestamp"] = pd.to_datetime(df_co2["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
+
+        df_co2 = df_co2.set_index("timestamp").resample("10min").mean().interpolate(method="linear").reset_index()
+        df_co2["co2"] = df_co2["co2"].round(2)
+        df_co2["timestamp"] = df_co2["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        updated_count = 0
+        for _, row in df_co2.iterrows():
+            cursor.execute("""
+                UPDATE metrics
+                SET co2 = ?
+                WHERE timestamp = ? AND (co2 IS NULL)
+            """, (row["co2"], row["timestamp"]))
+            updated_count += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "success",
+            "points_fetched": len(co2_points),
+            "rows_updated_in_db": updated_count
+        }
