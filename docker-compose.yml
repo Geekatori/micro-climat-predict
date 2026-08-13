@@ -14,6 +14,11 @@ services:
       - LON=${LON}
     networks:
       - meteo_network
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./data-collector
+          target: /app
 
   ml-engine:
     build: ./ml-engine
@@ -25,6 +30,11 @@ services:
       - PYTHONUNBUFFERED=1
     networks:
       - meteo_network
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./ml-engine
+          target: /app
 
   web-ui:
     build: ./web-ui
@@ -39,6 +49,18 @@ services:
       - HA_TOKEN=${HA_TOKEN}
     networks:
       - meteo_network
+    develop:
+      watch:
+        # Synchronise le code Python à chaud
+        - action: sync+restart
+          path: ./web-ui
+          target: /app
+          ignore:
+            - templates/
+        # Synchronise les templates HTML instantanément (très pratique pour le front)
+        - action: sync
+          path: ./web-ui/templates
+          target: /app/templates
 
   cron:
     image: alpine

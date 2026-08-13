@@ -25,8 +25,61 @@ ENTITIES = {
     "int_temp": "sensor.0x8c73dafffeda02b5_temperature",
     "int_hum": "sensor.0x8c73dafffeda02b5_humidity",
     "cor_temp": "sensor.temtop_c1plus_temtop_temperature",
-    "cor_hum": "sensor.temtop_c1plus_temtop_humidity"
+    "cor_hum": "sensor.temtop_c1plus_temtop_humidity",
+    "int_temp_min": "sensor.temperature_interieure_min"
 }
+
+def backfill_missing_int_temp_min(conn):
+    """
+    Checks if there are rows where int_temp_min is missing but source temperatures exist.
+    If so, updates all missing rows historically.
+    Uses an existing database connection to avoid SQLite database locks.
+    """
+    cursor = conn.cursor()
+
+    try:
+        # Check if at least one row needs to be updated
+        cursor.execute("""
+            SELECT 1 FROM metrics
+            WHERE int_temp_min IS NULL
+            AND (int_temp IS NOT NULL OR cor_temp IS NOT NULL)
+            LIMIT 1
+        """)
+        needs_update = cursor.fetchone()
+
+        if needs_update:
+            print(f"[{datetime.now()}] Auto-healing: Missing int_temp_min detected. Backfilling data...")
+
+            # We use a CASE statement because SQLite MIN(a, b) returns NULL if either a or b is NULL
+            cursor.execute("""
+                UPDATE metrics
+                SET int_temp_min = CASE
+                    WHEN int_temp IS NOT NULL AND cor_temp IS NOT NULL THEN MIN(int_temp, cor_temp)
+                    WHEN int_temp IS NOT NULL THEN int_temp
+                    WHEN cor_temp IS NOT NULL THEN cor_temp
+                    ELSE NULL
+                END
+                WHERE int_temp_min IS NULL
+                AND (int_temp IS NOT NULL OR cor_temp IS NOT NULL)
+            """)
+
+            print(f"[{datetime.now()}] Auto-healing complete. Updated {cursor.rowcount} rows.")
+    except sqlite3.OperationalError as e:
+        print(f"[{datetime.now()}] Auto-healing skipped (table might not be ready): {e}")
+
+
+def migrate_db(conn):
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(metrics)")
+    columns = [column[1] for column in cursor.fetchall()]
+
+    # Add int_temp_min column if it does not exist
+    if "int_temp_min" not in columns:
+        conn.execute("ALTER TABLE metrics ADD COLUMN int_temp_min REAL")
+        print("Migration: Added 'int_temp_min' column to metrics table.")
+
+    # Pass the existing connection instead of opening a new one
+    backfill_missing_int_temp_min(conn)
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -46,7 +99,6 @@ def init_db():
             wind_speed REAL
         )
     """)
-    # Table prévisions météo sans le soleil
     conn.execute("""
         CREATE TABLE IF NOT EXISTS weather_forecasts (
             timestamp TEXT PRIMARY KEY,
@@ -65,6 +117,9 @@ def init_db():
             message TEXT
         )
     """)
+
+    migrate_db(conn)
+
     conn.commit()
     conn.close()
 
@@ -185,11 +240,11 @@ async def run_collection():
             conn.execute("""
                 INSERT INTO metrics (
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed
+                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed, int_temp_min
                 )
                 SELECT
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed
+                    cor_temp, cor_hum, meteo_temp, meteo_hum, wind_speed, int_temp_min
                 FROM metrics_temp
                 WHERE true
                 ON CONFLICT(timestamp) DO UPDATE SET
@@ -201,7 +256,8 @@ async def run_collection():
                     cor_hum = COALESCE(metrics.cor_hum, excluded.cor_hum),
                     meteo_temp = COALESCE(metrics.meteo_temp, excluded.meteo_temp),
                     meteo_hum = COALESCE(metrics.meteo_hum, excluded.meteo_hum),
-                    wind_speed = COALESCE(metrics.wind_speed, excluded.wind_speed);
+                    wind_speed = COALESCE(metrics.wind_speed, excluded.wind_speed),
+                    int_temp_min = COALESCE(metrics.int_temp_min, excluded.int_temp_min, MIN(excluded.cor_temp, excluded.int_temp));
             """)
             conn.execute("DROP TABLE metrics_temp")
             conn.commit()

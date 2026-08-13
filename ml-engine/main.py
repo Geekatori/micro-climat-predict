@@ -112,9 +112,9 @@ async def train_models():
         rmse_ext = float(np.sqrt(mean_squared_error(y_te, model_ext.predict(X_te))))
         joblib.dump(model_ext, MODEL_EXT_PATH)
 
-        # --- 2. Train Interior Model ---
+        # --- 2. Train Interior Minimum Temperature Model ---
         X_int = df[FEATURES_INT]
-        y_int = df["int_temp"]
+        y_int = df["int_temp_min"]
         X_tr, X_te, y_tr, y_te = train_test_split(X_int, y_int, test_size=0.2, random_state=42)
         model_int = RandomForestRegressor(n_estimators=100, random_state=42)
         model_int.fit(X_tr, y_tr)
@@ -125,7 +125,7 @@ async def train_models():
         conn.execute("""
             INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (now_str, len(df), len(df), rmse_ext, rmse_int, "success", "Models trained with multiscale weather & solar features"))
+        """, (now_str, len(df), len(df), rmse_ext, rmse_int, "success", "Models trained with multiscale weather & solar features for min interior temp"))
         conn.commit()
         conn.close()
 
@@ -166,7 +166,7 @@ async def forecast_int():
     if not os.path.exists(MODEL_INT_PATH):
         raise HTTPException(status_code=400, detail="Interior model not trained.")
 
-    model = joblib.load(MODEL_INT_PATH)
+    model = joblib.joblib.load(MODEL_INT_PATH) if hasattr(joblib, 'joblib') else joblib.load(MODEL_INT_PATH)
     conn = sqlite3.connect(DB_PATH)
     df_m = pd.read_sql("SELECT timestamp, meteo_temp, meteo_hum, wind_speed FROM metrics ORDER BY timestamp ASC", conn)
     try:
@@ -184,6 +184,6 @@ async def forecast_int():
         return {"status": "success", "forecasts": []}
 
     preds = model.predict(df_features[FEATURES_INT])
-    df_features["predicted_int_temp"] = [round(float(p), 2) for p in preds]
+    df_features["predicted_int_temp_min"] = [round(float(p), 2) for p in preds]
 
-    return {"status": "success", "forecasts": df_features[["timestamp", "predicted_int_temp"]].to_dict(orient="records")}
+    return {"status": "success", "forecasts": df_features[["timestamp", "predicted_int_temp_min"]].to_dict(orient="records")}

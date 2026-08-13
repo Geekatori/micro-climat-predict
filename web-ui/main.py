@@ -18,7 +18,7 @@ HA_TOKEN = os.getenv("HA_TOKEN", "")
 # Les identifiants de tes capteurs dans Home Assistant
 ENTITIES = {
     "ext_temp": os.getenv("HA_EXT_TEMP", "sensor.exterieur_temperature"),
-    "int_temp": os.getenv("HA_INTERIOR_TEMP", "sensor.0x8c73dafffeda02b5_temperature"),
+    "int_temp_min": os.getenv("HA_INTERIOR_TEMP_MIN", "sensor.temperature_interieure_min"),
     "cor_temp": os.getenv("HA_COR_TEMP", "sensor.temtop_c1plus_temtop_temperature"),
 }
 
@@ -28,7 +28,7 @@ ML_ENGINE_URL = os.getenv("ML_ENGINE_URL", "http://ml-engine:8000")
 
 SENSOR_CONFIG = {
     "ext_temp": {"label": "Extérieur (°C) Réel", "color": "#ef4444", "dash": [], "type": "local"},
-    "int_temp": {"label": "Intérieur (°C) Réel", "color": "#3b82f6", "dash": [], "type": "local"},
+    "int_temp_min": {"label": "Intérieur Min (°C) Réel", "color": "#3b82f6", "dash": [], "type": "local"},
     "cor_temp": {"label": "Cor / Temtop (°C)", "color": "#8b5cf6", "dash": [], "type": "local"}
 }
 
@@ -95,18 +95,18 @@ async def admin_dashboard(request: Request):
                         resp_int = await client.get(f"{ML_ENGINE_URL}/api/forecast/int", timeout=5.0)
                         if resp_int.status_code == 200:
                             for item in resp_int.json().get("forecasts", []):
-                                forecast_int_dict[item["timestamp"]] = item["predicted_int_temp"]
+                                forecast_int_dict[item["timestamp"]] = item["predicted_int_temp_min"]
                 except Exception as e:
                     print(f"ML Int Forecast unreachable: {e}")
 
                 df["predicted_ext_temp"] = df["timestamp"].map(forecast_ext_dict)
-                df["predicted_int_temp"] = df["timestamp"].map(forecast_int_dict)
+                df["predicted_int_temp_min"] = df["timestamp"].map(forecast_int_dict)
 
                 df["ext_temp_pred_past"] = df.apply(lambda r: r["predicted_ext_temp"] if r["dt"] <= now_dt else None, axis=1)
-                df["int_temp_pred_past"] = df.apply(lambda r: r["predicted_int_temp"] if r["dt"] <= now_dt else None, axis=1)
+                df["int_temp_min_pred_past"] = df.apply(lambda r: r["predicted_int_temp_min"] if r["dt"] <= now_dt else None, axis=1)
 
                 df["ext_temp_forecast_mode"] = df.apply(lambda r: r["ext_temp"] if r["dt"] <= now_dt else r["predicted_ext_temp"], axis=1)
-                df["int_temp_forecast_mode"] = df.apply(lambda r: r["int_temp"] if r["dt"] <= now_dt else r["predicted_int_temp"], axis=1)
+                df["int_temp_min_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_min"], axis=1)
 
                 for col in ["meteo_temp", "meteo_hum", "wind_speed"]:
                     if col in df.columns:
@@ -116,12 +116,12 @@ async def admin_dashboard(request: Request):
                 chart_data_payload = {
                     "timestamps": df["timestamp"].tolist(),
                     "ext_temp": df["ext_temp"].tolist() if "ext_temp" in df else [],
-                    "int_temp": df["int_temp"].tolist() if "int_temp" in df else [],
+                    "int_temp_min": df["int_temp_min"].tolist() if "int_temp_min" in df else [],
                     "cor_temp": df["cor_temp"].tolist() if "cor_temp" in df else [],
                     "ext_temp_pred_past": df["ext_temp_pred_past"].tolist(),
-                    "int_temp_pred_past": df["int_temp_pred_past"].tolist(),
+                    "int_temp_min_pred_past": df["int_temp_min_pred_past"].tolist(),
                     "ext_temp_forecast_mode": df["ext_temp_forecast_mode"].tolist(),
-                    "int_temp_forecast_mode": df["int_temp_forecast_mode"].tolist(),
+                    "int_temp_min_forecast_mode": df["int_temp_min_forecast_mode"].tolist(),
                     "meteo_temp_past": df["meteo_temp_past"].tolist() if "meteo_temp_past" in df else [],
                     "meteo_temp_forecast": df["meteo_temp_forecast"].tolist() if "meteo_temp_forecast" in df else [],
                     "meteo_hum_past": df["meteo_hum_past"].tolist() if "meteo_hum_past" in df else [],
@@ -136,7 +136,7 @@ async def admin_dashboard(request: Request):
                     "wind_speed": df["wind_speed"].tolist() if "wind_speed" in df else []
                 }
 
-                drop_cols = [c for c in ["dt", "predicted_ext_temp", "predicted_int_temp", "ext_temp_pred_past", "int_temp_pred_past", "ext_temp_forecast_mode", "int_temp_forecast_mode"] if c in df_metrics.columns]
+                drop_cols = [c for c in ["dt", "predicted_ext_temp", "predicted_int_temp_min", "ext_temp_pred_past", "int_temp_min_pred_past", "ext_temp_forecast_mode", "int_temp_min_forecast_mode"] if c in df_metrics.columns]
                 df_tail = df_metrics.drop(columns=drop_cols, errors="ignore").tail(50).sort_values(by="timestamp", ascending=False)
                 records = df_tail.to_dict(orient="records")
                 columns = list(df_tail.columns)
@@ -241,37 +241,74 @@ async def main_dashboard_widget(request: Request):
     """Affiche la page principale épurée (ApexCharts, vue 24h/7d, temps réel)."""
     return templates.TemplateResponse(request, "widget.html")
 
-
 @app.get("/api-meteo/data/{version}")
-async def get_apex_metrics(version: str):
-    """Récupère l'historique capteurs en direct de Home Assistant et combine avec le ML/Open-Meteo."""
+async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "forecast"):
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     hours_back = 24 if version == '24h' else (7 * 24)
     start_time = now_utc - timedelta(hours=hours_back)
     end_time = now_utc + timedelta(days=2)
 
-    start_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # HA fetch window: only the last 1 hour to get real-time data between cron jobs
+    ha_fetch_start = now_utc - timedelta(hours=1)
+    if ha_fetch_start < start_time:
+        ha_fetch_start = start_time
+
+    # Formatting dates for SQLite queries
+    start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
+    ha_start_str_db = ha_fetch_start.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Formatting dates for HA API
+    ha_start_str_api = ha_fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_str_api = end_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     ha_headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
-    entities_filter = ",".join(ENTITIES.values())
 
-    ha_data_dict = {key: [] for key in ENTITIES.keys()}
+    current_entities = {
+        "ext_temp": ENTITIES["ext_temp"],
+        "int_temp_min": ENTITIES["int_temp_min"],
+        "cor_temp": ENTITIES["cor_temp"],
+        "int_temp": os.getenv("HA_INTERIOR_TEMP", "sensor.0x8c73dafffeda02b5_temperature")
+    }
+    entities_filter = ",".join(current_entities.values())
+
+    ha_data_dict = {key: [] for key in current_entities.keys()}
     meteo_points = []
     forecast_ext_dict, forecast_int_dict = {}, {}
 
+    # 1. Fetch Historical Data from SQLite (Fast load for the bulk of the graph)
+    try:
+        conn_db = sqlite3.connect(DB_PATH)
+        # We strictly cut off the DB query at 'ha_start_str_db' to avoid overlapping with HA real-time data
+        df_metrics = pd.read_sql(
+            f"SELECT timestamp, ext_temp, int_temp_min, cor_temp, int_temp "
+            f"FROM metrics "
+            f"WHERE timestamp >= '{start_str_db}' AND timestamp < '{ha_start_str_db}' "
+            f"ORDER BY timestamp ASC",
+            conn_db
+        )
+
+        for _, row in df_metrics.iterrows():
+            try:
+                dt = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
+                if pd.notna(row["ext_temp"]): ha_data_dict["ext_temp"].append((dt, float(row["ext_temp"])))
+                if pd.notna(row["int_temp_min"]): ha_data_dict["int_temp_min"].append((dt, float(row["int_temp_min"])))
+                if pd.notna(row["cor_temp"]): ha_data_dict["cor_temp"].append((dt, float(row["cor_temp"])))
+                if pd.notna(row["int_temp"]): ha_data_dict["int_temp"].append((dt, float(row["int_temp"])))
+            except:
+                continue
+    except Exception as e:
+        print(f"DB Metrics Error: {e}")
+
+    # 2. Fetch Real-time Data from Home Assistant (Last 1 hour) & Open-Meteo / ML
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # 1. Récupération Home Assistant
         try:
-            url_ha = f"{HA_URL}/api/history/period/{start_str}?filter_entity_id={entities_filter}&end_time={end_str}"
+            url_ha = f"{HA_URL}/api/history/period/{ha_start_str_api}?filter_entity_id={entities_filter}&end_time={end_str_api}"
             ha_resp = await client.get(url_ha, headers=ha_headers)
             if ha_resp.status_code == 200:
-                json_data = ha_resp.json()
-                for entity_history in json_data:
-                    if not entity_history:
-                        continue
+                for entity_history in ha_resp.json():
+                    if not entity_history: continue
                     entity_id = entity_history[0].get("entity_id")
-                    key = next((k for k, v in ENTITIES.items() if v == entity_id), None)
+                    key = next((k for k, v in current_entities.items() if v == entity_id), None)
                     if key:
                         for state in entity_history:
                             try:
@@ -280,35 +317,37 @@ async def get_apex_metrics(version: str):
                                 val = float(state["state"])
                                 if not math.isnan(val) and not math.isinf(val):
                                     ha_data_dict[key].append((dt, val))
-                            except:
-                                continue
+                            except: continue
         except Exception as e:
             print(f"HA Direct API Error: {e}")
 
-        # 2. Récupération Open-Meteo depuis la base de données locale
+        # Fetch Open-Meteo history and forecasts from DB (Met_temp doesn't need real-time)
         try:
-            conn_db = sqlite3.connect(DB_PATH)
             df_m_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
             try:
                 df_f_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM weather_forecasts WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
             except:
                 df_f_meteo = pd.DataFrame()
-            conn_db.close()
 
             df_meteo_combined = pd.concat([df_m_meteo, df_f_meteo]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
-
             for _, row in df_meteo_combined.iterrows():
                 try:
-                    dt = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).replace(tzinfo=None)
+                    ts_str = row["timestamp"].replace("Z", "+00:00") if "Z" in row["timestamp"] else row["timestamp"]
+                    if len(ts_str) <= 19:
+                        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    else:
+                        dt = datetime.fromisoformat(ts_str).replace(tzinfo=None)
+
                     if start_time <= dt <= end_time:
                         ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
                         meteo_points.append([ts_ms, float(row["meteo_temp"])])
-                except:
-                    continue
+                except: continue
         except Exception as e:
             print(f"Meteo DB Error: {e}")
+        finally:
+            conn_db.close() # Safely close DB connection
 
-        # 3. Récupération Prévisions ML Extérieur
+        # Fetch ML Engine forecasts
         try:
             resp_ext = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext")
             if resp_ext.status_code == 200:
@@ -317,15 +356,15 @@ async def get_apex_metrics(version: str):
         except Exception as e:
             print(f"ML Ext Forecast unreachable: {e}")
 
-        # 4. Récupération Prévisions ML Intérieur
         try:
             resp_int = await client.get(f"{ML_ENGINE_URL}/api/forecast/int")
             if resp_int.status_code == 200:
                 for item in resp_int.json().get("forecasts", []):
-                    forecast_int_dict[item["timestamp"]] = item["predicted_int_temp"]
+                    forecast_int_dict[item["timestamp"]] = item["predicted_int_temp_min"]
         except Exception as e:
             print(f"ML Int Forecast unreachable: {e}")
 
+    # Helper function to sort and format timestamps for ApexCharts
     def format_series(points_list):
         series = []
         for dt, val in sorted(points_list, key=lambda x: x[0]):
@@ -337,109 +376,68 @@ async def get_apex_metrics(version: str):
     for ts_str, val in forecast_ext_dict.items():
         try:
             dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-            if dt > now_utc and dt <= end_time:
-                sim_ext_points.append((dt, float(val)))
-        except:
-            pass
+            # Logic switch based on 'ml' mode
+            if ml == "eval":
+                if start_time <= dt <= now_utc:
+                    sim_ext_points.append((dt, float(val)))
+            else:
+                if dt > now_utc and dt <= end_time:
+                    sim_ext_points.append((dt, float(val)))
+        except: pass
 
     for ts_str, val in forecast_int_dict.items():
         try:
             dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-            if dt > now_utc and dt <= end_time:
-                sim_int_points.append((dt, float(val)))
-        except:
-            pass
+            if ml == "eval":
+                if start_time <= dt <= now_utc:
+                    sim_int_points.append((dt, float(val)))
+            else:
+                if dt > now_utc and dt <= end_time:
+                    sim_int_points.append((dt, float(val)))
+        except: pass
 
+    # Get the latest valid reading for the dashboard cards
     def get_last_val(key):
         valid = [v for dt, v in ha_data_dict.get(key, []) if dt <= now_utc]
         return f"{valid[-1]}°C" if valid else "--°C"
 
-    # --- 1. CALCUL DU MESSAGE DU PIC DE CHALEUR ---
-    peak_message = None
+    if mode == "detailed":
+        current_values = {
+            "ext": get_last_val("ext_temp"),
+            "cor": get_last_val("cor_temp"),
+            "int": get_last_val("int_temp")
+        }
+    else:
+        current_values = {
+            "ext": get_last_val("ext_temp"),
+            "cor": "--",
+            "int": get_last_val("int_temp_min")
+        }
 
-    ext_history = ha_data_dict.get("ext_temp", [])
-    if len(ext_history) > 1:
-        current_ext_val = ext_history[-1][1]
-        one_hour_ago = now_utc - timedelta(hours=1)
-        past_ext_candidates = [v for dt, v in ext_history if dt <= one_hour_ago]
-
-        is_growing = True
-        if past_ext_candidates:
-            is_growing = current_ext_val > past_ext_candidates[-1]
-
-        if is_growing and sim_ext_points:
-            max_sim_dt = None
-            max_sim_val = -999.0
-            for dt, val in sim_ext_points:
-                if val > max_sim_val:
-                    max_sim_val = val
-                    max_sim_dt = dt
-
-            if max_sim_dt and max_sim_dt > now_utc:
-                time_to_peak = max_sim_dt - now_utc
-                total_minutes = int(time_to_peak.total_seconds() // 60)
-                if total_minutes > 0 and total_minutes < 240: # inférieur à 4 heures
-                    hours = total_minutes // 60
-                    minutes = total_minutes % 60
-                    if hours > 0:
-                        peak_message = f"Il reste {hours}h{minutes:02d} avant que le maximum de la journée soit atteint"
-                    else:
-                        peak_message = f"Il reste {minutes} minutes avant que le maximum de la journée soit atteint"
-
-    # --- 2. CALCUL DE L'INTERSECTION (TIMESTAMP D'INVERSION) ---
-    inversion_timestamp = None
-    if sim_int_points and sim_ext_points:
-        ext_dict = {dt: val for dt, val in sim_ext_points}
-        sorted_int = sorted(sim_int_points, key=lambda x: x[0])
-
-        for i in range(1, len(sorted_int)):
-            dt1, int1 = sorted_int[i-1]
-            dt2, int2 = sorted_int[i]
-
-            if dt1 < now_utc:
-                continue
-
-            ext1 = ext_dict.get(dt1)
-            ext2 = ext_dict.get(dt2)
-
-            if ext1 is not None and ext2 is not None:
-                if (ext1 >= int1 and ext2 < int2) or (ext1 <= int1 and ext2 > int2):
-                    diff1 = ext1 - int1
-                    diff2 = ext2 - int2
-                    if diff1 - diff2 != 0:
-                        fraction = diff1 / (diff1 - diff2)
-                        delta_seconds = (dt2 - dt1).total_seconds() * fraction
-                        inversion_dt = dt1 + timedelta(seconds=delta_seconds)
-                    else:
-                        inversion_dt = dt1
-
-                    inversion_timestamp = int(inversion_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
-                    break
-
-    current_values = {
-        "ext": get_last_val("ext_temp"),
-        "cor": get_last_val("cor_temp"),
-        "int": get_last_val("int_temp")
-    }
+    ext_pred_name = "Extérieur (prévu)" if ml == "forecast" else "Extérieur (ML passé)"
+    int_pred_name = "Intérieur min (prévu)" if ml == "forecast" else "Intérieur min (ML passé)"
 
     series_data = [
-        {"name": "Intérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["int_temp"] if dt <= now_utc])},
-        {"name": "Couloir", "data": format_series([(dt, v) for dt, v in ha_data_dict["cor_temp"] if dt <= now_utc])},
         {"name": "Extérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["ext_temp"] if dt <= now_utc])},
-        {"name": "Open-Meteo", "data": meteo_points},
-        {"name": "Intérieur (Prévu)", "data": format_series(sim_int_points)},
-        {"name": "Extérieur (Prévu)", "data": format_series(sim_ext_points)}
+        {"name": ext_pred_name, "data": format_series(sim_ext_points)},
+        {"name": int_pred_name, "data": format_series(sim_int_points)},
+        {"name": "Open-Meteo", "data": meteo_points}
     ]
 
-    series_data = [s for s in series_data if len(s["data"]) > 0]
+    if mode == "detailed":
+        series_data.append({"name": "Intérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["int_temp"] if dt <= now_utc])})
+        series_data.append({"name": "Couloir", "data": format_series([(dt, v) for dt, v in ha_data_dict["cor_temp"] if dt <= now_utc])})
+    else:
+        series_data.append({"name": "Intérieur min", "data": format_series([(dt, v) for dt, v in ha_data_dict["int_temp_min"] if dt <= now_utc])})
 
+    series_data = [s for s in series_data if len(s["data"]) > 0]
     data_generated_at = datetime.now(timezone.utc).isoformat()
 
     return {
         "series": series_data,
         "current": current_values,
-        "inversion_time": inversion_timestamp,
-        "peak_message": peak_message,
+        "inversion_time": None,
+        "peak_message": None,
         "generated_at": data_generated_at
     }
 
@@ -462,9 +460,10 @@ async def validation_error_page(request: Request, model: str = "ext"):
                     resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/{model}", timeout=5.0)
                     if resp.status_code == 200:
                         for item in resp.json().get("forecasts", []):
-                            forecast_dict[item["timestamp"]] = item.get(f"predicted_{model}_temp")
+                            val_pred = item.get(f"predicted_{model}_temp") if model == "ext" else item.get(f"predicted_{model}_temp_min")
+                            forecast_dict[item["timestamp"]] = val_pred
 
-                col_name = "ext_temp" if model == "ext" else "int_temp"
+                col_name = "ext_temp" if model == "ext" else "int_temp_min"
                 if col_name not in df_metrics.columns:
                     col_name = "ext" if model == "ext" else "int"
 

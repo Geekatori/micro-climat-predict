@@ -1,80 +1,173 @@
-<div class="grid grid-cols-3 gap-1.5 md:gap-4 mb-2">
-    <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
-        <div>
-            <p class="text-[10px] md:text-xs text-gray-400">Extérieur</p>
-            <h3 id="val-ext" class="text-base md:text-xl font-bold text-[#f39c12]">--°C</h3>
-        </div>
-        <div id="peak-countdown" class="hidden text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded-full border border-orange-500/30"></div>
-    </div>
-    <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow">
-        <p class="text-[10px] md:text-xs text-gray-400">Couloir</p>
-        <h3 id="val-cor" class="text-base md:text-xl font-bold text-[#3498db]">--°C</h3>
-    </div>
-    <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow">
-        <p class="text-[10px] md:text-xs text-gray-400">Intérieur</p>
-        <h3 id="val-int" class="text-base md:text-xl font-bold text-[#e74c3c]">--°C</h3>
-    </div>
+<div id="cards-container" class="grid gap-1.5 md:gap-4 mb-2">
+    <!-- Généré dynamiquement -->
 </div>
 
 <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex-grow relative flex flex-col min-h-[400px]">
-    <div class="flex justify-between items-center mb-1">
+    <!-- Barre d'outils supérieure avec les switches natifs HTML -->
+    <div class="flex flex-wrap justify-between items-center mb-3 gap-2 pb-2 border-b border-gray-700/60">
+        <div class="text-xs font-semibold text-gray-300">Contrôles du graphique</div>
+        <div class="flex items-center gap-3">
+            <!-- Switch ML (Passé / Futur) -->
+            <label class="relative inline-flex items-center cursor-pointer select-none">
+                <input type="checkbox" id="switch-ml" class="sr-only peer">
+                <div class="w-8 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-600 border border-gray-600"></div>
+                <span class="ml-1.5 text-[11px] text-gray-300">Passé (ML)</span>
+            </label>
+
+            <!-- Switch Mode (Simple / Détaillé) -->
+            <label class="relative inline-flex items-center cursor-pointer select-none">
+                <input type="checkbox" id="switch-mode" class="sr-only peer">
+                <div class="w-8 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600 border border-gray-600"></div>
+                <span class="ml-1.5 text-[11px] text-gray-300">Détaillé</span>
+            </label>
+
+            <!-- Curseur à 3 positions (Zoom ±4h / 24h / 7 Jours) -->
+            <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-[11px] font-medium">
+                <button type="button" onclick="setZoomMode('zoom4h')" id="btn-zoom-4h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">±4h</button>
+                <button type="button" onclick="setZoomMode('24h')" id="btn-zoom-24h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">24h</button>
+                <button type="button" onclick="setZoomMode('7d')" id="btn-zoom-7d" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">7j</button>
+            </div>
+        </div>
     </div>
+
     <div id="chart" class="w-full flex-grow"></div>
 
-    <!-- Badge de fraîcheur positionné en absolu (discret, sans impact vertical) -->
     <span id="data-freshness" class="absolute bottom-2 right-4 text-[9px] md:text-[10px] text-gray-500 italic hidden pointer-events-none">
         Données : --
     </span>
 </div>
-<script>
-    const urlParams = new URLSearchParams(window.location.search);
-    const version = urlParams.get('v') === '7d' ? '7d' : '24h';
 
-    // Mise à jour des libellés du bouton de bascule 24h/7d (desktop et mobile)
-    const toggleTexts = version === '24h' ? ['📅 Vue 7 jours', '?v=7d'] : ['🕒 Vue 24h', '?v=24h'];
-    ['view-toggle-btn', 'view-toggle-btn-mobile'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) {
-            el.href = toggleTexts[1];
-            el.innerText = toggleTexts[0];
-        }
+<script>
+    let urlParams = new URLSearchParams(window.location.search);
+    let currentZoomMode = urlParams.get('v') === '7d' ? '7d' : (urlParams.get('zoom') === '4h' ? 'zoom4h' : '24h');
+    let mode = urlParams.get('mode') === 'detailed' ? 'detailed' : 'simple';
+    let mlMode = urlParams.get('ml') === 'eval' ? 'eval' : 'forecast';
+
+    // Cache local pour éviter les requêtes réseau superflues
+    let cachedData = {
+        '24h': null,
+        '7d': null
+    };
+
+    // Initialisation des états visuels
+    document.getElementById('switch-ml').checked = (mlMode === 'eval');
+    document.getElementById('switch-mode').checked = (mode === 'detailed');
+    updateZoomButtonsUI();
+
+    // Écouteurs globaux
+    document.getElementById('switch-ml').addEventListener('change', (e) => {
+        mlMode = e.target.checked ? 'eval' : 'forecast';
+        cachedData = { '24h': null, '7d': null }; // Invalide le cache si le mode ML change
+        updateUrlState();
+        loadData();
     });
+
+    document.getElementById('switch-mode').addEventListener('change', (e) => {
+        mode = e.target.checked ? 'detailed' : 'simple';
+        updateUrlState();
+        loadData();
+    });
+
+    function updateUrlState() {
+        const p = new URLSearchParams(window.location.search);
+        p.set('v', currentZoomMode === '7d' ? '7d' : '24h');
+        if (currentZoomMode === 'zoom4h') p.set('zoom', '4h');
+        else p.delete('zoom');
+        p.set('mode', mode);
+        p.set('ml', mlMode);
+        window.history.replaceState({}, '', `?${p.toString()}`);
+    }
+
+    function updateZoomButtonsUI() {
+        ['4h', '24h', '7d'].forEach(z => {
+            const btn = document.getElementById(`btn-zoom-${z}`);
+            if (!btn) return;
+            const isActive = (currentZoomMode === 'zoom4h' && z === '4h') ||
+                             (currentZoomMode === '24h' && z === '24h') ||
+                             (currentZoomMode === '7d' && z === '7d');
+
+            if (isActive) {
+                btn.className = "px-2.5 py-1 rounded-md transition-all duration-200 bg-blue-600 text-white font-bold shadow-sm";
+            } else {
+                btn.className = "px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white";
+            }
+        });
+    }
 
     let chart = null;
 
-    function getMidnightAnnotations() {
+    function renderCards(current) {
+        const container = document.getElementById('cards-container');
+        if (!container) return;
+
+        if (mode === 'detailed') {
+            container.className = "grid grid-cols-3 gap-1.5 md:gap-4 mb-2";
+            container.innerHTML = `
+                <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
+                    <div>
+                        <p class="text-[10px] md:text-xs text-gray-400">Extérieur</p>
+                        <h3 id="val-ext" class="text-base md:text-xl font-bold text-[#f39c12]">${current.ext}</h3>
+                    </div>
+                </div>
+                <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow">
+                    <p class="text-[10px] md:text-xs text-gray-400">Couloir</p>
+                    <h3 id="val-cor" class="text-base md:text-xl font-bold text-[#3498db]">${current.cor}</h3>
+                </div>
+                <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
+                    <div>
+                        <p class="text-[10px] md:text-xs text-gray-400">Intérieur</p>
+                        <h3 id="val-int" class="text-base md:text-xl font-bold text-[#e74c3c]">${current.int}</h3>
+                    </div>
+                </div>
+            `;
+        } else {
+            container.className = "grid grid-cols-2 gap-1.5 md:gap-4 mb-2";
+            container.innerHTML = `
+                <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
+                    <div>
+                        <p class="text-[10px] md:text-xs text-gray-400">Extérieur</p>
+                        <h3 id="val-ext" class="text-base md:text-xl font-bold text-[#f39c12]">${current.ext}</h3>
+                    </div>
+                </div>
+                <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex justify-between items-center">
+                    <div>
+                        <p class="text-[10px] md:text-xs text-gray-400">Intérieur min</p>
+                        <h3 id="val-int" class="text-base md:text-xl font-bold text-[#a855f7]">${current.int}</h3>
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    function getMidnightAnnotations(minTime, maxTime) {
         let annotations = [];
         let now = new Date();
         for (let i = -30; i <= 7; i++) {
             let d = new Date(now);
             d.setDate(d.getDate() + i);
             d.setHours(0, 0, 0, 0);
+            let timeVal = d.getTime();
 
-            annotations.push({
-                x: d.getTime(),
-                borderColor: '#4b5563',
-                strokeDashArray: 4,
-                label: {
-                    text: d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }),
-                    style: {
-                        color: '#e5e7eb',
-                        background: '#1f2937',
-                        fontSize: '11px',
-                        padding: { left: 5, right: 5, top: 2, bottom: 2 }
-                    },
-                    orientation: 'horizontal',
-                    offsetY: 0
-                }
-            });
+            if (timeVal >= minTime && timeVal <= maxTime) {
+                annotations.push({
+                    x: timeVal,
+                    borderColor: '#4b5563',
+                    strokeDashArray: 4,
+                    label: {
+                        text: d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }),
+                        style: { color: '#e5e7eb', background: '#1f2937', fontSize: '11px', padding: { left: 5, right: 5, top: 2, bottom: 2 } },
+                        orientation: 'horizontal',
+                        offsetY: 0
+                    }
+                });
+            }
         }
         return annotations;
     }
 
     function interpolateValue(dataArray, targetTime) {
         if (!dataArray || dataArray.length === 0) return null;
-        if (targetTime < dataArray[0][0] || targetTime > dataArray[dataArray.length - 1][0]) {
-            return null;
-        }
+        if (targetTime < dataArray[0][0] || targetTime > dataArray[dataArray.length - 1][0]) return null;
 
         for (let i = 0; i < dataArray.length - 1; i++) {
             let p1 = dataArray[i];
@@ -90,217 +183,181 @@
         return null;
     }
 
+    // Gestion du clic sur le sélecteur à 3 positions
+    function setZoomMode(targetMode) {
+        if (currentZoomMode === targetMode) return;
+
+        let oldMode = currentZoomMode;
+        currentZoomMode = targetMode;
+        updateZoomButtonsUI();
+        updateUrlState();
+
+        let requiredApiVersion = (targetMode === '7d') ? '7d' : '24h';
+        let oldApiVersion = (oldMode === '7d') ? '7d' : '24h';
+
+        if (requiredApiVersion !== oldApiVersion || !cachedData[requiredApiVersion]) {
+            loadData();
+        } else {
+            processAndRenderChart(cachedData[requiredApiVersion]);
+        }
+    }
+
     function loadData() {
-        fetch(`/api-meteo/data/${version}?_t=${Date.now()}`)
+        let apiVersion = (currentZoomMode === '7d') ? '7d' : '24h';
+
+        fetch(`/api-meteo/data/${apiVersion}?mode=${mode}&ml=${mlMode}&_t=${Date.now()}`)
             .then(res => {
                 if (!res.ok) throw new Error("HTTP error: " + res.status);
                 return res.json();
             })
             .then(data => {
-                const elInt = document.getElementById('val-int');
-                const elCor = document.getElementById('val-cor');
-                const elExt = document.getElementById('val-ext');
-                const pageTitle = document.getElementById('page-title');
-
-                if (elInt) elInt.innerText = data.current.int;
-                if (elCor) elCor.innerText = data.current.cor;
-                if (elExt) elExt.innerText = data.current.ext;
-                if (pageTitle) pageTitle.innerText = `Ext : ${data.current.ext} | Int : ${data.current.int} | Couloir : ${data.current.cor}`;
-
-                // Mise à jour de l'indicateur de fraîcheur des données
-                const freshEl = document.getElementById('data-freshness');
-                if (freshEl && data.generated_at) {
-                    // On parse le timestamp envoyé par le serveur (UTC)
-                    let d = new Date(data.generated_at);
-
-                    // Formatage en heure locale française
-                    let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-
-                    freshEl.innerText = `Données calculées à ${timeStr}`;
-                    freshEl.style.display = 'block';
-                }
-
-                let seriesData = data.series || [];
-
-                let allTimestamps = [];
-                seriesData.forEach(s => {
-                    (s.data || []).forEach(pt => allTimestamps.push(pt[0]));
-                });
-
-                let now = Date.now();
-                let minTime = allTimestamps.length > 0 ? Math.min(...allTimestamps) : now - (24 * 3600 * 1000);
-                let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
-
-                const styleMap = {
-                    'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },
-                    'Couloir': { color: '#3498db', width: 2, dash: 0 },
-                    'Extérieur': { color: '#f39c12', width: 2, dash: 0 },
-                    'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 },
-                    'Intérieur (Prévu)': { color: '#f87171', width: 2, dash: 5 },
-                    'Extérieur (Prévu)': { color: '#fbd38d', width: 2, dash: 5 }
-                };
-
-                let chartColors = [];
-                let strokeWidths = [];
-                let strokeDash = [];
-
-                seriesData.forEach(s => {
-                    let cfg = styleMap[s.name] || { color: '#ffffff', width: 2, dash: 0 };
-                    chartColors.push(cfg.color);
-                    strokeWidths.push(cfg.width);
-                    strokeDash.push(cfg.dash);
-                });
-
-                let chartAnnotations = getMidnightAnnotations();
-
-                if (data.inversion_time) {
-                    let invDate = new Date(data.inversion_time);
-                    let timeStr = invDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-
-                    chartAnnotations.push({
-                        x: data.inversion_time,
-                        borderColor: '#10b981',
-                        strokeDashArray: 2,
-                        label: {
-                            text: 'Ouvrez à ' + timeStr,
-                            style: {
-                                color: '#fff',
-                                background: '#059669',
-                                fontSize: '11px',
-                                padding: { left: 5, right: 5, top: 3, bottom: 3 }
-                            },
-                            orientation: 'horizontal',
-                            offsetY: 25
-                        }
-                    });
-                }
-
-                const countdownEl = document.getElementById('peak-countdown');
-                if (countdownEl) {
-                    if (data.peak_message) {
-                        countdownEl.innerText = data.peak_message;
-                        countdownEl.style.display = 'block';
-                    } else {
-                        countdownEl.style.display = 'none';
-                    }
-                }
-
-                const chartContainer = document.querySelector("#chart");
-                if (!chartContainer) return;
-                const exactHeight = (chartContainer.clientHeight > 50 ? chartContainer.clientHeight : 400) - 15;
-
-                if (chart) {
-                    chart.updateOptions({
-                        stroke: { curve: 'straight', width: strokeWidths, dashArray: strokeDash },
-                        colors: chartColors,
-                        xaxis: { min: minTime, max: maxTime },
-                        annotations: { xaxis: chartAnnotations },
-                        chart: { height: exactHeight }
-                    });
-                    chart.updateSeries(seriesData);
-                } else {
-                    var options = {
-                        chart: {
-                            type: 'line',
-                            height: exactHeight,
-                            background: 'transparent',
-                            selection: { enabled: false },
-                            zoom: { enabled: true, type: 'x', autoScaleYaxis: true, pinch: true },
-                            pan: { enabled: true, mode: 'x', speed: 20, inertia: true },
-                            toolbar: { show: true, autoSelected: 'pan' },
-                            locales: [{
-                                name: 'fr',
-                                options: {
-                                    months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'],
-                                    shortMonths: ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'],
-                                    days: ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'],
-                                    shortDays: ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
-                                }
-                            }],
-                            defaultLocale: 'fr'
-                        },
-                        theme: { mode: 'dark' },
-                        series: seriesData,
-                        annotations: { xaxis: chartAnnotations },
-                        xaxis: {
-                            type: 'datetime',
-                            min: minTime,
-                            max: maxTime,
-                            tickAmount: version === '7d' ? 7 : 12,
-                            labels: {
-                                datetimeUTC: false,
-                                formatter: function(val, timestamp) {
-                                    if (version === '7d') {
-                                        return new Date(timestamp).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-                                    }
-                                    return new Date(val).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-                                },
-                                style: { colors: '#9ca3af' }
-                            },
-                            axisBorder: { color: '#374151' },
-                            axisTicks: { color: '#374151' }
-                        },
-                        yaxis: {
-                            labels: { style: { colors: '#9ca3af' } }
-                        },
-                        grid: { borderColor: 'rgba(255, 255, 255, 0.05)' },
-                        stroke: { curve: 'straight', width: strokeWidths, dashArray: strokeDash },
-                        colors: chartColors,
-                        tooltip: {
-                            shared: false,
-                            intersect: false,
-                            custom: function({ series, seriesIndex, dataPointIndex, w }) {
-                                let dataPoint = w.globals.initialSeries[seriesIndex].data[dataPointIndex];
-                                if (!dataPoint) return '';
-
-                                let timestamp = dataPoint[0];
-                                let nowTime = new Date().getTime();
-                                let dateStr = new Date(timestamp).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }) + ' à ' + new Date(timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-
-                                let html = `<div class="custom-tooltip">
-                                    <div class="custom-tooltip-title">${dateStr}</div>`;
-
-                                w.globals.initialSeries.forEach((s, idx) => {
-                                    let val = '--';
-                                    if (timestamp > nowTime && idx < 3) {
-                                        val = '--';
-                                    } else {
-                                        let found = s.data.find(pt => Math.abs(pt[0] - timestamp) < 30000);
-                                        if (found) {
-                                            val = found[1];
-                                        } else {
-                                            let interpolated = interpolateValue(s.data, timestamp);
-                                            if (interpolated !== null) {
-                                                val = interpolated;
-                                            }
-                                        }
-                                    }
-                                });
-
-                                html += `</div>`;
-                                return html;
-                            }
-                        }
-                    };
-                    chart = new ApexCharts(chartContainer, options);
-                    chart.render();
-                }
+                cachedData[apiVersion] = data;
+                processAndRenderChart(data);
             })
             .catch(err => console.error("Error loading data:", err));
     }
 
+    function processAndRenderChart(data) {
+        renderCards(data.current);
+
+        const freshEl = document.getElementById('data-freshness');
+        if (freshEl && data.generated_at) {
+            let d = new Date(data.generated_at);
+            let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            freshEl.innerText = `Données calculées à ${timeStr}`;
+            freshEl.style.display = 'block';
+        }
+
+        let seriesData = data.series || [];
+        let allTimestamps = [];
+        seriesData.forEach(s => {
+            (s.data || []).forEach(pt => allTimestamps.push(pt[0]));
+        });
+
+        let now = Date.now();
+        let minTime = allTimestamps.length > 0 ? Math.min(...allTimestamps) : now - (24 * 3600 * 1000);
+        let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
+
+        if (currentZoomMode === 'zoom4h') {
+            let windowMs = 4 * 3600 * 1000;
+            minTime = now - windowMs;
+            maxTime = now + windowMs * 2;
+        }
+
+        const styleMap = {
+            'Intérieur min': { color: '#a855f7', width: 2, dash: 0 },
+            'Intérieur min (prévu)': { color: '#a855f7', width: 2, dash: 5 },
+            'Intérieur min (ML passé)': { color: '#a855f7', width: 2, dash: 5 },
+            'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },
+            'Couloir': { color: '#3498db', width: 2, dash: 0 },
+            'Extérieur': { color: '#f39c12', width: 2, dash: 0 },
+            'Extérieur (prévu)': { color: '#f39c12', width: 2, dash: 5 },
+            'Extérieur (ML passé)': { color: '#f39c12', width: 2, dash: 5 },
+            'Open-Meteo': { color: '#64748b', width: 1.5, dash: 5 }
+        };
+
+        let chartColors = [];
+        let strokeWidths = [];
+        let strokeDash = [];
+
+        seriesData.forEach(s => {
+            let cfg = styleMap[s.name] || { color: '#ffffff', width: 2, dash: 0 };
+            chartColors.push(cfg.color);
+            strokeWidths.push(cfg.width);
+            strokeDash.push(cfg.dash);
+        });
+
+        let chartAnnotations = getMidnightAnnotations(minTime, maxTime);
+        const chartContainer = document.querySelector("#chart");
+        if (!chartContainer) return;
+        const exactHeight = (chartContainer.clientHeight > 50 ? chartContainer.clientHeight : 400) - 15;
+
+        if (chart) {
+            chart.updateOptions({
+                stroke: { curve: 'straight', width: strokeWidths, dashArray: strokeDash },
+                colors: chartColors,
+                xaxis: { min: minTime, max: maxTime, tickAmount: currentZoomMode === '7d' ? 7 : 12 },
+                annotations: { xaxis: chartAnnotations },
+                chart: { height: exactHeight }
+            });
+            chart.updateSeries(seriesData);
+        } else {
+            var options = {
+                chart: {
+                    type: 'line',
+                    height: exactHeight,
+                    background: 'transparent',
+                    selection: { enabled: false },
+                    zoom: { enabled: true, type: 'x', autoScaleYaxis: true, pinch: true },
+                    pan: { enabled: true, mode: 'x', speed: 20, inertia: true },
+                    toolbar: { show: true, autoSelected: 'pan' }
+                },
+                theme: { mode: 'dark' },
+                series: seriesData,
+                annotations: { xaxis: chartAnnotations },
+                xaxis: {
+                    type: 'datetime',
+                    min: minTime,
+                    max: maxTime,
+                    tickAmount: currentZoomMode === '7d' ? 7 : 12,
+                    labels: {
+                        datetimeUTC: false,
+                        formatter: function(val, timestamp) {
+                            const ts = timestamp || val;
+                            if (!ts) return '';
+                            if (currentZoomMode === '7d') {
+                                return new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+                            }
+                            return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                        },
+                        style: { colors: '#9ca3af' }
+                    },
+                    axisBorder: { color: '#374151' },
+                    axisTicks: { color: '#374151' }
+                },
+                yaxis: { labels: { style: { colors: '#9ca3af' } } },
+                grid: { borderColor: 'rgba(255, 255, 255, 0.05)' },
+                stroke: { curve: 'straight', width: strokeWidths, dashArray: strokeDash },
+                colors: chartColors,
+                tooltip: {
+                    shared: true,
+                    intersect: false,
+                    custom: function({ series, seriesIndex, dataPointIndex, w }) {
+                        let hoveredTimestamp = w.globals.seriesX[seriesIndex][dataPointIndex];
+                        let d = new Date(hoveredTimestamp);
+                        let dateStr = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+                        let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                        let title = `${dateStr} à ${timeStr}`;
+
+                        let html = `<div class="custom-tooltip">
+                                        <div class="custom-tooltip-title">${title}</div>`;
+
+                        w.config.series.forEach((s, i) => {
+                            let val = interpolateValue(s.data, hoveredTimestamp);
+                            let displayVal = val !== null ? val.toFixed(1) + " °C" : "-";
+                            let color = w.config.colors[i];
+
+                            html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <span style="width: 8px; height: 8px; border-radius: 50%; background-color: ${color}; display: inline-block;"></span>
+                                            <span style="color: #e5e7eb;">${s.name}</span>
+                                        </div>
+                                        <span style="font-weight: bold; margin-left: 20px; color: ${val !== null ? '#fff' : '#6b7280'};">${displayVal}</span>
+                                    </div>`;
+                        });
+
+                        html += `</div>`;
+                        return html;
+                    }
+                }
+            };
+            chart = new ApexCharts(chartContainer, options);
+            chart.render();
+        }
+    }
+
     loadData();
     setInterval(loadData, 300000);
-
-    window.addEventListener('resize', () => {
-        if (chart) {
-            const chartContainer = document.querySelector("#chart");
-            const newHeight = chartContainer ? chartContainer.clientHeight : 0;
-            if (newHeight > 0) {
-                chart.updateOptions({ chart: { height: newHeight } });
-            }
-        }
-    });
 </script>
 <style>
     .custom-tooltip {

@@ -10,7 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
     <script>
-        // Fonction utilitaire globale de conversion UTC -> Local
+        // Global utility function for UTC -> Local conversion
         function parseUtcToLocal(dateStr) {
             if (!dateStr) return null;
             let isoStr = dateStr.includes('Z') || dateStr.includes('+') ? dateStr : dateStr.replace(' ', 'T') + 'Z';
@@ -19,7 +19,7 @@
     </script>
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
-    <!-- Header / Navbar unifiée -->
+    <!-- Header / Navbar -->
     {% include 'navbar.html' %}
 
     <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
@@ -46,7 +46,7 @@
             </div>
         </div>
 
-        <!-- Script d'initialisation des cartes du haut -->
+        <!-- Script for Header Cards Date Formatting -->
         <script>
             function formatCardDate(elementId, dateStr) {
                 const el = document.getElementById(elementId);
@@ -60,7 +60,7 @@
             formatCardDate('card-end-date', "{{ end_date }}");
         </script>
 
-        <!-- Bloc d'Actions Rapides de Pilotage -->
+        <!-- System & ML Actions Block -->
         <div class="bg-gray-800 px-6 py-4 rounded-xl border border-gray-700 shadow flex flex-col sm:flex-row justify-between items-center gap-4">
             <div>
                 <h3 class="text-sm font-semibold text-white">Pilotage du Système & ML</h3>
@@ -81,27 +81,18 @@
             </div>
         </div>
 
-        <!-- Chart Section -->
+        <!-- Unified Comprehensive Chart Section -->
         {% if chart_data_payload and chart_data_payload.timestamps %}
         <div class="bg-gray-800 rounded-xl border border-gray-700 shadow p-6">
             <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                <h2 class="text-lg font-medium text-white">Évolution des Données Météo et Capteurs</h2>
-                <div class="flex items-center gap-2 flex-wrap">
-                    <button id="btnModePast" onclick="switchMode('past')" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
-                        📊 Mode Validation
-                    </button>
-                    <button id="btnModeForecast" onclick="switchMode('forecast')" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
-                        🔮 Mode Prévision
-                    </button>
-                    <button id="btnModeAll" onclick="switchMode('all')" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow">
-                        📈 Tout afficher
-                    </button>
-                    <button onclick="window.myChart.resetZoom()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow border border-gray-600 ml-2">
+                <h2 class="text-lg font-medium text-white">Vue d'ensemble complète : Capteurs, Passé et Prévisions</h2>
+                <div class="flex items-center gap-2">
+                    <button onclick="window.myChart.resetZoom()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow border border-gray-600">
                         🔍 Reset Zoom
                     </button>
                 </div>
             </div>
-            <div class="relative h-[420px] w-full">
+            <div class="relative h-[450px] w-full">
                 <canvas id="tempChart"></canvas>
             </div>
         </div>
@@ -110,32 +101,17 @@
             const localTimestamps = rawChartData.timestamps.map(ts => parseUtcToLocal(ts));
             const ctx = document.getElementById('tempChart').getContext('2d');
 
-            const datasetsPast = [
-                { label: "Extérieur Réel", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Extérieur Prédit (Passé)", data: rawChartData.ext_temp_pred_past, borderColor: "#fca5a5", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Réel", data: rawChartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Prédit (Passé)", data: rawChartData.int_temp_pred_past, borderColor: "#93c5fd", borderDash: [4, 4], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Corridor", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
-                { label: "Open-Meteo", data: rawChartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
-            ];
-
-            const datasetsForecast = [
-                { label: "Extérieur Réel", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Extérieur Prédit", data: rawChartData.ext_temp_forecast_mode, borderColor: "#fca5a5", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Réel", data: rawChartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Intérieur Prédit", data: rawChartData.int_temp_forecast_mode, borderColor: "#93c5fd", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Corridor", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, hidden: true },
-                { label: "Open-Meteo (Passé)", data: rawChartData.meteo_temp_past, borderColor: "#64748b", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true },
-                { label: "Open-Meteo (Prévision)", data: rawChartData.meteo_temp_forecast, borderColor: "#94a3b8", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true }
-            ];
-
-            const datasetsAll = [
-                { label: "Extérieur (°C)", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Intérieur (°C)", data: rawChartData.int_temp, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+            // Single comprehensive dataset combining all metrics and forecasts
+            const comprehensiveDatasets = [
+                { label: "Extérieur Réel (°C)", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Extérieur Prédit", data: rawChartData.ext_temp_forecast_mode, borderColor: "#fca5a5", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Intérieur Min Réel (°C)", data: rawChartData.int_temp_min, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Intérieur Min Prédit", data: rawChartData.int_temp_min_forecast_mode, borderColor: "#93c5fd", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
                 { label: "Corridor (°C)", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
                 { label: "Open-Meteo (°C)", data: rawChartData.meteo_temp, borderColor: "#10b981", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Open-Meteo (Prévision)", data: rawChartData.meteo_temp_forecast, borderColor: "#6ee7b7", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
                 { label: "Humidité Ext (%)", data: rawChartData.ext_hum, borderColor: "#06b6d4", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
-                { label: "Humidité Int (%)", data: rawChartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
+                { label: "Humidité Int Min (%)", data: rawChartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' },
                 { label: "Humidité Cor (%)", data: rawChartData.cor_hum, borderColor: "#6366f1", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
                 { label: "Humidité Météo (%)", data: rawChartData.meteo_hum, borderColor: "#14b8a6", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
                 { label: "Vent (km/h)", data: rawChartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1' }
@@ -143,12 +119,12 @@
 
             window.myChart = new Chart(ctx, {
                 type: 'line',
-                data: { labels: localTimestamps, datasets: datasetsPast },
+                data: { labels: localTimestamps, datasets: comprehensiveDatasets },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { labels: { color: '#e5e7eb' } },
+                        legend: { labels: { color: '#e5e7eb', boxWidth: 12 } },
                         zoom: {
                             pan: { enabled: true, mode: 'x', speed: 20 },
                             zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x' }
@@ -171,24 +147,6 @@
                     }
                 }
             });
-
-            function switchMode(mode) {
-                document.getElementById('btnModePast').className = "bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
-                document.getElementById('btnModeForecast').className = "bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
-                document.getElementById('btnModeAll').className = "bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
-
-                if (mode === 'past') {
-                    window.myChart.data.datasets = datasetsPast;
-                    document.getElementById('btnModePast').className = "bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
-                } else if (mode === 'forecast') {
-                    window.myChart.data.datasets = datasetsForecast;
-                    document.getElementById('btnModeForecast').className = "bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
-                } else if (mode === 'all') {
-                    window.myChart.data.datasets = datasetsAll;
-                    document.getElementById('btnModeAll').className = "bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow";
-                }
-                window.myChart.update();
-            }
         </script>
         {% endif %}
 
@@ -257,7 +215,7 @@
     </div>
 
     <script>
-        // Traduction automatique des timestamps du tableau en heure locale
+        // Automatic timestamp translation in the data table
         document.querySelectorAll('.local-timestamp').forEach(el => {
             let utcStr = el.getAttribute('data-utc');
             let d = parseUtcToLocal(utcStr);
