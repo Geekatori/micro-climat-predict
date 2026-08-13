@@ -246,7 +246,7 @@ async def get_apex_metrics(version: str, mode: str = "simple", ml: str = "foreca
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     hours_back = 24 if version == '24h' else (7 * 24)
     start_time = now_utc - timedelta(hours=hours_back)
-    end_time = now_utc + timedelta(days=2)
+    end_time = now_utc + timedelta(days=7 if version == '7d' else 2)
 
     # HA fetch window: only the last 1 hour to get real-time data between cron jobs
     ha_fetch_start = now_utc - timedelta(hours=1)

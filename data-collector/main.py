@@ -142,7 +142,7 @@ async def fetch_weather_data_days(days: int):
     async with httpx.AsyncClient() as client:
         now_utc = datetime.now(timezone.utc)
         start_time = now_utc - timedelta(days=days)
-        end_time = now_utc + timedelta(days=2)
+        end_time = now_utc + timedelta(days=7)
 
         ha_headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
         start_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -175,7 +175,7 @@ async def fetch_weather_data_days(days: int):
             try:
                 print(f"[{datetime.now()}] Fetching Open-Meteo data (Attempt {attempt + 1}/{max_retries})...")
                 meteo_resp = await client.get(
-                    f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days={days}&forecast_days=2",
+                    f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days={days}&forecast_days=7",
                     timeout=10.0
                 )
                 print(f"[{datetime.now()}] Open-Meteo response status: {meteo_resp.status_code}")
