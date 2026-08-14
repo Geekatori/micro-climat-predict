@@ -27,7 +27,6 @@ ENTITIES = {
     "cor_temp": "sensor.temtop_c1plus_temtop_temperature",
     "cor_hum": "sensor.temtop_c1plus_temtop_humidity",
     "co2": "sensor.temtop_c1plus_temtop_co2",
-    "int_temp_min": "sensor.temperature_interieure_min"
 }
 
 def migrate_db(conn):
@@ -202,12 +201,9 @@ async def run_collection(days: int = None):
             final_past_df = pd.concat(dfs_past, axis=1)
             final_past_df = final_past_df.ffill().bfill().reset_index()
 
-            # Fallback for old historical data: since int_temp and cor_temp are already continuously
-            # propagated (ffilled), we safely compute their minimum where int_temp_min is missing
-            if "int_temp_min" in final_past_df.columns and "int_temp" in final_past_df.columns and "cor_temp" in final_past_df.columns:
-                final_past_df["int_temp_min"] = final_past_df["int_temp_min"].fillna(
-                    final_past_df[["int_temp", "cor_temp"]].min(axis=1)
-                )
+            # Always compute int_temp_min dynamically as the minimum between int_temp and cor_temp
+            if "int_temp" in final_past_df.columns and "cor_temp" in final_past_df.columns:
+                final_past_df["int_temp_min"] = final_past_df[["int_temp", "cor_temp"]].min(axis=1)
 
             numeric_cols_past = final_past_df.select_dtypes(include=["number"]).columns
             final_past_df[numeric_cols_past] = final_past_df[numeric_cols_past].round(2)
