@@ -196,10 +196,11 @@ async def admin_dashboard(request: Request):
     )
 
 @app.get("/trigger-collect")
-async def trigger_collect():
+async def trigger_collect(days: int = 10):
     try:
         async with httpx.AsyncClient() as client:
-            await client.get(f"{COLLECTOR_URL}/api/collect", timeout=30.0)
+            # On transmet le paramètre ?days=X au data-collector
+            await client.get(f"{COLLECTOR_URL}/api/collect?days={days}", timeout=60.0)
     except Exception as e:
         print(f"Failed to trigger collection: {e}")
     return RedirectResponse(url="/admin", status_code=303)

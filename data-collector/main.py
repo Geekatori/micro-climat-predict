@@ -172,12 +172,14 @@ async def fetch_weather_data_days(days: int):
         return ha_data_dict, meteo_past_points, meteo_future_points
 
 @app.get("/api/collect")
-async def run_collection():
+async def run_collection(days: int = None):
     init_db()
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    days_to_fetch = get_optimal_fetch_window(DB_PATH)
+    # Utilise le paramètre de l'URL s'il est fourni, sinon prend la valeur optimale (2 ou 10)
+    days_to_fetch = days if days is not None else get_optimal_fetch_window(DB_PATH)
 
     try:
+        print(f"[{datetime.now()}] Starting collection for the last {days_to_fetch} days...")
         ha_data, meteo_past_points, meteo_future_points = await fetch_weather_data_days(days=days_to_fetch)
 
         # 1. Process Past Data (Metrics)
@@ -199,6 +201,13 @@ async def run_collection():
             # Concaténation globale et propagation propre de la dernière valeur pour chaque capteur (pas de croisement)
             final_past_df = pd.concat(dfs_past, axis=1)
             final_past_df = final_past_df.ffill().bfill().reset_index()
+
+            # Fallback for old historical data: since int_temp and cor_temp are already continuously
+            # propagated (ffilled), we safely compute their minimum where int_temp_min is missing
+            if "int_temp_min" in final_past_df.columns and "int_temp" in final_past_df.columns and "cor_temp" in final_past_df.columns:
+                final_past_df["int_temp_min"] = final_past_df["int_temp_min"].fillna(
+                    final_past_df[["int_temp", "cor_temp"]].min(axis=1)
+                )
 
             numeric_cols_past = final_past_df.select_dtypes(include=["number"]).columns
             final_past_df[numeric_cols_past] = final_past_df[numeric_cols_past].round(2)
