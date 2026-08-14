@@ -14,31 +14,28 @@
 <body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
     {% include 'navbar.html' %}
 
-    <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
+    <div class="w-full px-4 md:px-6 py-6 flex-grow flex flex-col gap-6">
         <!-- En-tête et Sélecteurs -->
         <div class="flex flex-col md:flex-row justify-between items-center bg-gray-800 p-5 rounded-xl border border-gray-700 shadow gap-4">
             <div>
                 <h1 class="text-lg font-medium text-white">Analyse des Écarts (Mesure - Inférence)</h1>
-                <p class="text-xs text-gray-400">Évaluation de la précision selon les états thermiques (4 Modes)</p>
+                <p class="text-xs text-gray-400">Évaluation de la précision selon le modèle choisi</p>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
-                <!-- 1. Mode Extérieur -->
+                <!-- 1. Modèle Extérieur -->
                 <a href="/validation/error?model=ext" class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'ext' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
                     Extérieur
                 </a>
 
-                <!-- 2 & 3. Modes Intérieur (Fermé / Ouvert) visibles si on est sur le modèle int -->
-                <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-xs font-medium ml-2">
-                    <a href="/validation/error?model=int" class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'int' and current_filter == 'all' %}bg-blue-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
-                        Intérieur (Tous)
-                    </a>
-                    <a href="/validation/error?model=int&filter=int_closed" class="px-2.5 py-1 rounded-md transition {% if current_model == 'int' and current_filter == 'int_closed' %}bg-purple-600 text-white font-bold{% else %}text-gray-400 hover:text-white{% endif %}">
-                        Int. (Fermé)
-                    </a>
-                    <a href="/validation/error?model=int&filter=int_open" class="px-2.5 py-1 rounded-md transition {% if current_model == 'int' and current_filter == 'int_open' %}bg-purple-600 text-white font-bold{% else %}text-gray-400 hover:text-white{% endif %}">
-                        Int. (Ouvert)
-                    </a>
-                </div>
+                <!-- 2. Modèle Intérieur Généraliste (RF) -->
+                <a href="/validation/error?model=int_rf" class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'int_rf' %}bg-purple-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
+                    Intérieur (RF)
+                </a>
+
+                <!-- 3. Modèle Intérieur Confiné (STD) -->
+                <a href="/validation/error?model=int_std" class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition shadow {% if current_model == 'int_std' %}bg-emerald-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">
+                    Intérieur Confiné (STD)
+                </a>
 
                 <button onclick="window.errorChart.resetZoom()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow border border-gray-600 ml-2">
                     🔍 Reset Zoom

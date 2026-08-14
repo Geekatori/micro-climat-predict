@@ -2,8 +2,14 @@
     <!-- Généré dynamiquement -->
 </div>
 
+<!-- Bandeau d'alerte / Inversion -->
+<div id="alert-banner" class="hidden mb-2 p-2.5 bg-blue-900/40 border border-blue-700/50 rounded-xl text-xs text-blue-200 flex justify-between items-center">
+    <span id="alert-message">--</span>
+    <span id="opening-time-badge" class="bg-blue-600 px-2 py-0.5 rounded text-white font-semibold shadow">--</span>
+</div>
+
 <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex-grow relative flex flex-col min-h-[400px]">
-    <!-- Barre d'outils supérieure avec les switches natifs HTML -->
+    <!-- Barre d'outils supérieure -->
     <div class="flex flex-wrap justify-between items-center mb-3 gap-2 pb-2 border-b border-gray-700/60">
         <div class="text-xs font-semibold text-gray-300">Contrôles du graphique</div>
         <div class="flex flex-wrap items-center gap-3">
@@ -22,7 +28,7 @@
                 <span class="ml-1.5 text-[11px] text-gray-300">Détaillé</span>
             </label>
 
-            <!-- Curseur à 3 positions (Zoom ±4h / 24h / 7 Jours) -->
+            <!-- Curseur à 3 positions -->
             <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-[11px] font-medium ml-auto">
                 <button type="button" onclick="setZoomMode('zoom4h')" id="btn-zoom-4h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">±4h</button>
                 <button type="button" onclick="setZoomMode('24h')" id="btn-zoom-24h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">24h</button>
@@ -44,18 +50,15 @@
     let mode = urlParams.get('mode') === 'detailed' ? 'detailed' : 'simple';
     let mlMode = urlParams.get('ml') === 'eval' ? 'eval' : 'forecast';
 
-    // Cache local pour éviter les requêtes réseau superflues
     let cachedData = {
         '24h': null,
         '7d': null
     };
 
-    // Initialisation des états visuels
     document.getElementById('switch-ml').checked = (mlMode === 'eval');
     document.getElementById('switch-mode').checked = (mode === 'detailed');
     updateZoomButtonsUI();
 
-    // Écouteurs globaux
     document.getElementById('switch-ml').addEventListener('change', (e) => {
         mlMode = e.target.checked ? 'eval' : 'forecast';
         cachedData = { '24h': null, '7d': null };
@@ -140,9 +143,42 @@
         }
     }
 
-    function getMidnightAnnotations(minTime, maxTime) {
+    function updateAlertBanner(peakMsg, inversionTime) {
+        const banner = document.getElementById('alert-banner');
+        const msgEl = document.getElementById('alert-message');
+        const badgeEl = document.getElementById('opening-time-badge');
+
+        if (!banner) return;
+
+        // Aucun peak_message : on masque complètement le bandeau
+        if (!peakMsg) {
+            banner.classList.add('hidden');
+            return;
+        }
+
+        banner.classList.remove('hidden');
+        msgEl.innerText = peakMsg;
+
+        if (inversionTime) {
+            const d = new Date(inversionTime);
+            const timeStr = d.toLocaleTimeString('fr-FR', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            badgeEl.innerText = `Ouvrir à ${timeStr}`;
+            badgeEl.style.display = 'inline-block';
+        } else {
+            badgeEl.style.display = 'none';
+        }
+    }
+
+
+    function getDynamicAnnotations(minTime, maxTime, inversionTime) {
         let annotations = [];
         let now = new Date();
+
+        // Minuit markers
         for (let i = -30; i <= 7; i++) {
             let d = new Date(now);
             d.setDate(d.getDate() + i);
@@ -163,6 +199,28 @@
                 });
             }
         }
+
+        // Marqueur d'ouverture
+        if (inversionTime) {
+            let invDate = new Date(inversionTime);
+            let invTimeMs = invDate.getTime();
+
+            if (invTimeMs >= minTime && invTimeMs <= maxTime) {
+                annotations.push({
+                    x: invTimeMs,
+                    borderColor: '#3b82f6',
+                    strokeDashArray: 0,
+                    borderWidth: 2,
+                    label: {
+                        text: 'Ouverture : ' + invDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+                        style: { color: '#ffffff', background: '#2563eb', fontSize: '11px', padding: { left: 6, right: 6, top: 4, bottom: 4 }, fontWeight: 'bold' },
+                        orientation: 'horizontal',
+                        offsetY: 25
+                    }
+                });
+            }
+        }
+
         return annotations;
     }
 
@@ -184,7 +242,6 @@
         return null;
     }
 
-    // Gestion du clic sur le sélecteur à 3 positions
     function setZoomMode(targetMode) {
         if (currentZoomMode === targetMode) return;
 
@@ -236,14 +293,7 @@
 
     function processAndRenderChart(data) {
         renderCards(data.current);
-
-        const freshEl = document.getElementById('data-freshness');
-        if (freshEl && data.generated_at) {
-            let d = new Date(data.generated_at);
-            let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-            freshEl.innerText = `Données calculées à ${timeStr}`;
-            freshEl.style.display = 'block';
-        }
+        updateAlertBanner(data.peak_message, data.inversion_time);
 
         let seriesData = data.series || [];
         let allTimestamps = [];
@@ -255,19 +305,23 @@
         let minTime = allTimestamps.length > 0 ? Math.min(...allTimestamps) : now - (24 * 3600 * 1000);
         let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
 
-        if (currentZoomMode === 'zoom4h') {
+        // Ajustement précis des limites visuelles
+        if (currentZoomMode === '24h') {
+            minTime = now - (24 * 3600 * 1000);
+            maxTime = mlMode === 'forecast' ? now + (24 * 3600 * 1000) : now + (2 * 3600 * 1000);
+        } else if (currentZoomMode === 'zoom4h') {
             let windowMs = 4 * 3600 * 1000;
             minTime = now - windowMs;
-            maxTime = now + windowMs * 2;
+            maxTime = mlMode === 'forecast' ? now + windowMs * 2 : now + windowMs;
+        } else if (currentZoomMode === '7d') {
+            minTime = now - (7 * 24 * 3600 * 1000);
+            maxTime = mlMode === 'forecast' ? now + (2 * 24 * 3600 * 1000) : now + (2 * 3600 * 1000);
         }
 
-        // Intégration propre des deux courbes d'intérieur (Confinement vs Aération) tout en gardant l'historique complet
         const styleMap = {
             'Intérieur min': { color: '#a855f7', width: 2, dash: 0 },
-            'Intérieur min (Confinement)': { color: '#64748b', width: 2, dash: 5 }, // Gris/Bleu pointillé pour le confinement
-            'Intérieur min (Aération)': { color: '#38bdf8', width: 2, dash: 5 },    // Bleu ciel plein pour l'aération
-            'Intérieur min (Confinement passé)': { color: '#64748b', width: 2, dash: 5 },
-            'Intérieur min (Aération passé)': { color: '#38bdf8', width: 2, dash: 0 },
+            'Intérieur (Modèle prévu)': { color: '#a855f7', width: 2, dash: 5 },
+            'Intérieur (Modèle passé)': { color: '#a855f7', width: 2, dash: 5 },
             'Intérieur': { color: '#e74c3c', width: 2, dash: 0 },
             'Couloir': { color: '#3498db', width: 2, dash: 0 },
             'Extérieur': { color: '#f39c12', width: 2, dash: 0 },
@@ -287,7 +341,7 @@
             strokeDash.push(cfg.dash);
         });
 
-        let chartAnnotations = getMidnightAnnotations(minTime, maxTime);
+        let chartAnnotations = getDynamicAnnotations(minTime, maxTime, data.inversion_time);
         const chartContainer = document.querySelector("#chart");
         if (!chartContainer) return;
         const exactHeight = (chartContainer.clientHeight > 50 ? chartContainer.clientHeight : 400) - 15;

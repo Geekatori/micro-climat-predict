@@ -24,6 +24,8 @@ services:
     build: ./ml-engine
     container_name: ml-engine
     restart: unless-stopped
+    ports:
+      - "8001:8000"
     volumes:
       - data-volume:/app/data
     environment:
@@ -47,6 +49,7 @@ services:
     environment:
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
+      - ML_ENGINE_URL=http://ml-engine:8000
     networks:
       - meteo_network
     develop:

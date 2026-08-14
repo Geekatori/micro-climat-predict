@@ -21,7 +21,7 @@
 <body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
     {% include 'navbar.html' %}
 
-    <div class="container mx-auto px-4 py-6 max-w-7xl flex-grow flex flex-col gap-6">
+    <div class="w-full px-4 md:px-6 py-6 flex-grow flex flex-col gap-6">
         <!-- Cartes Statistiques Globales -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow">
@@ -109,23 +109,29 @@
             const ctx = document.getElementById('tempChart').getContext('2d');
 
             const comprehensiveDatasets = [
-                // --- Capteurs de Température (Couleurs de référence harmonisées) ---
+                // --- Capteurs de Température ---
                 { label: "Extérieur Réel (°C)", data: rawChartData.ext_temp, borderColor: "#f39c12", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
                 { label: "Extérieur Prédit", data: rawChartData.ext_temp_forecast_mode, borderColor: "#f39c12", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+
                 { label: "Intérieur Min Réel (°C)", data: rawChartData.int_temp_min, borderColor: "#a855f7", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Intérieur Min Prédit", data: rawChartData.int_temp_min_forecast_mode, borderColor: "#38bdf8", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Intérieur Prédit (RF)", data: rawChartData.int_temp_rf, borderColor: "#e879f9", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Intérieur Prédit (STD)", data: rawChartData.int_temp_std, borderColor: "#14b8a6", borderDash: [3, 3], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+
                 { label: "Corridor (°C)", data: rawChartData.cor_temp, borderColor: "#3498db", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
                 { label: "Open-Meteo (°C)", data: rawChartData.meteo_temp, borderColor: "#64748b", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
                 { label: "Open-Meteo (Prévision)", data: rawChartData.meteo_temp_forecast, borderColor: "#64748b", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
 
-                // --- Humidité & Vent (Distingués avec des teintes vertes/émeraude) ---
+                // --- Humidité & Vent ---
                 { label: "Humidité Ext (%)", data: rawChartData.ext_hum, borderColor: "#10b981", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
                 { label: "Humidité Int Min (%)", data: rawChartData.int_hum, borderColor: "#34d399", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
                 { label: "Humidité Cor (%)", data: rawChartData.cor_hum, borderColor: "#059669", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
                 { label: "Vent (km/h)", data: rawChartData.wind_speed, borderColor: "#84cc16", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
 
-                // --- CO2 (Inchangé) ---
-                { label: "CO2 (ppm)", data: rawChartData.co2 || [], borderColor: "#fb7185", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y2', hidden: false }
+                // --- CO2 ---
+                { label: "CO2 (ppm)", data: rawChartData.co2 || [], borderColor: "#fb7185", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y2', hidden: false },
+
+                { label: "Couverture Nuageuse (%)", data: rawChartData.cloud_cover, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Rayonnement Direct (W/m²)", data: rawChartData.direct_radiation, borderColor: "#eab308", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true }
             ];
 
             // --- Plugin Customisé pour le Bandeau d'État (Ouvert / Confinement) ---
@@ -138,12 +144,12 @@
                     const xAxis = chart.scales.x;
                     const chartArea = chart.chartArea;
 
-                    const bandHeight = 10; // Hauteur du bandeau en pixels
-                    const yPos = chartArea.bottom - bandHeight; // Collé au bas du graphique
+                    const bandHeight = 10;
+                    const yPos = chartArea.bottom - bandHeight;
 
                     const colors = {
-                        0: 'rgba(71, 85, 105, 0.6)',  // Slate-600 : Confinement / Fermé
-                        1: 'rgba(56, 189, 248, 0.8)'   // Sky-400 : Fenêtre Ouverte (Aération)
+                        0: 'rgba(71, 85, 105, 0.6)',
+                        1: 'rgba(56, 189, 248, 0.8)'
                     };
 
                     ctx.save();
@@ -183,8 +189,8 @@
                         ctx.moveTo(x, topY);
                         ctx.lineTo(x, bottomY);
                         ctx.lineWidth = 1;
-                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; // Ligne blanche semi-transparente
-                        ctx.setLineDash([4, 4]); // Effet tireté (optionnel)
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                        ctx.setLineDash([4, 4]);
                         ctx.stroke();
                         ctx.restore();
                     }
@@ -202,12 +208,10 @@
                     },
                     plugins: {
                         legend: { labels: { color: '#e5e7eb', boxWidth: 12 } },
-                        // --- Configuration du Tooltip et du Zoom ---
                         tooltip: {
                             mode: 'index',
                             intersect: false,
                             callbacks: {
-                                // Formate proprement la date et l'heure dans l'infobulle au survol
                                 title: function(tooltipItems) {
                                     let d = new Date(tooltipItems[0].parsed.x);
                                     return d.toLocaleString('fr-FR', {
@@ -224,8 +228,8 @@
                         zoom: {
                             pan: {
                                 enabled: true,
-                                mode: 'x',        // Déplacement horizontal par clic-glisser
-                                modifierKey: null // Pas besoin de touche clavier, le clic-glisser direct suffit
+                                mode: 'x',
+                                modifierKey: null
                             },
                             zoom: {
                                 wheel: { enabled: true, speed: 0.1 },
@@ -238,7 +242,7 @@
                         x: {
                             type: 'time',
                             min: localTimestamps[0],
-                            max: new Date(), // Bloqué à "maintenant" par défaut au chargement
+                            max: new Date(),
                             time: {
                                 parser: 'yyyy-MM-dd HH:mm:ss',
                                 displayFormats: { hour: 'HH:mm', day: 'dd MMM' }

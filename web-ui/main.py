@@ -9,6 +9,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+def clean_for_json(data):
+    """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
+    if isinstance(data, list):
+        return [clean_for_json(item) for item in data]
+    elif isinstance(data, dict):
+        return {key: clean_for_json(value) for key, value in data.items()}
+    elif isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return None
+    return data
+
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
@@ -97,63 +108,59 @@ async def admin_dashboard(request: Request):
                 now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
                 df["dt"] = pd.to_datetime(df["timestamp"])
 
-                forecast_ext_dict, forecast_int_closed_dict, forecast_int_open_dict = {}, {}, {}
+                forecast_ext_dict, forecast_int_rf_dict, forecast_int_std_dict = {}, {}, {}
+
+                # --- Récupération des prédictions (RF & STD) ---
                 async with httpx.AsyncClient() as client:
                     try:
                         resp_ext = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext", timeout=5.0)
                         if resp_ext.status_code == 200:
                             for item in resp_ext.json().get("forecasts", []):
-                                forecast_ext_dict[item["timestamp"]] = item["predicted_ext_temp"]
+                                forecast_ext_dict[item["timestamp"]] = item.get("predicted_ext_temp")
                     except Exception as e:
                         print(f"ML Ext Forecast unreachable: {e}")
 
                     try:
-                        resp_int_closed = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=0", timeout=5.0)
-                        if resp_int_closed.status_code == 200:
-                            for item in resp_int_closed.json().get("forecasts", []):
-                                forecast_int_closed_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+                        resp_int = await client.get(f"{ML_ENGINE_URL}/api/forecast/int", timeout=10.0)
+                        if resp_int.status_code == 200:
+                            for item in resp_int.json().get("forecasts", []):
+                                forecast_int_rf_dict[item["timestamp"]] = item.get("predicted_int_temp_rf")
+                                forecast_int_std_dict[item["timestamp"]] = item.get("predicted_int_temp_std")
                     except Exception as e:
-                        print(f"ML Int Closed Forecast unreachable: {e}")
-
-                    try:
-                        resp_int_open = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=1", timeout=5.0)
-                        if resp_int_open.status_code == 200:
-                            for item in resp_int_open.json().get("forecasts", []):
-                                forecast_int_open_dict[item["timestamp"]] = item["predicted_int_temp_min"]
-                    except Exception as e:
-                        print(f"ML Int Open Forecast unreachable: {e}")
+                        print(f"ML Int Forecast unreachable: {e}")
 
                 df["predicted_ext_temp"] = df["timestamp"].map(forecast_ext_dict)
-                df["predicted_int_temp_closed"] = df["timestamp"].map(forecast_int_closed_dict)
-                df["predicted_int_temp_open"] = df["timestamp"].map(forecast_int_open_dict)
+                df["predicted_int_temp_rf"] = df["timestamp"].map(forecast_int_rf_dict)
+                df["predicted_int_temp_std"] = df["timestamp"].map(forecast_int_std_dict)
 
-                df["ext_temp_pred_past"] = df.apply(lambda r: r["predicted_ext_temp"] if r["dt"] <= now_dt else None, axis=1)
-                df["int_temp_min_pred_past"] = df.apply(lambda r: r["predicted_int_temp_closed"] if r["dt"] <= now_dt else None, axis=1)
+                # S'assurer que le DataFrame possède la colonne window_open_flag
+                if "window_open_flag" not in df.columns:
+                    df["window_open_flag"] = 0
 
+                # Préparation des modes pour l'affichage
                 df["ext_temp_forecast_mode"] = df.apply(lambda r: r["ext_temp"] if r["dt"] <= now_dt else r["predicted_ext_temp"], axis=1)
-                df["int_temp_closed_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_closed"], axis=1)
-                df["int_temp_open_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_open"], axis=1)
+                df["int_temp_rf_forecast_mode"] = df.apply(lambda r: r["int_temp_min"] if r["dt"] <= now_dt else r["predicted_int_temp_rf"], axis=1)
 
-                for col in ["meteo_temp", "meteo_hum", "wind_speed"]:
+                # Masquage de la courbe STD : on affiche la valeur QUE si on est confiné (ou dans le futur)
+                df["int_temp_std_masked"] = df.apply(
+                    lambda r: r["predicted_int_temp_std"] if (r["window_open_flag"] == 0 or r["dt"] > now_dt) else None,
+                    axis=1
+                )
+
+                for col in ["meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation"]:
                     if col in df.columns:
                         df[f"{col}_past"] = df.apply(lambda row: row[col] if row["dt"] <= now_dt else None, axis=1)
                         df[f"{col}_forecast"] = df.apply(lambda row: row[col] if row["dt"] > now_dt else None, axis=1)
 
-                # S'assurer que le DataFrame possède la colonne window_open_flag (provenant de l'API annotée)
-                if "window_open_flag" not in df.columns:
-                    df["window_open_flag"] = 0
-
-                chart_data_payload = {
+                chart_data_payload = clean_for_json({
                     "timestamps": df["timestamp"].tolist(),
                     "ext_temp": df["ext_temp"].tolist() if "ext_temp" in df else [],
                     "int_temp_min": df["int_temp_min"].tolist() if "int_temp_min" in df else [],
                     "cor_temp": df["cor_temp"].tolist() if "cor_temp" in df else [],
                     "co2": df["co2"].tolist() if "co2" in df else [],
-                    "ext_temp_pred_past": df["ext_temp_pred_past"].tolist(),
-                    "int_temp_min_pred_past": df["int_temp_min_pred_past"].tolist(),
                     "ext_temp_forecast_mode": df["ext_temp_forecast_mode"].tolist(),
-                    "int_temp_closed_forecast_mode": df["int_temp_closed_forecast_mode"].tolist(),
-                    "int_temp_open_forecast_mode": df["int_temp_open_forecast_mode"].tolist(),
+                    "int_temp_rf_forecast_mode": df["int_temp_rf_forecast_mode"].tolist(),
+                    "int_temp_std_masked": df["int_temp_std_masked"].tolist(),
                     "meteo_temp_past": df["meteo_temp_past"].tolist() if "meteo_temp_past" in df else [],
                     "meteo_temp_forecast": df["meteo_temp_forecast"].tolist() if "meteo_temp_forecast" in df else [],
                     "meteo_hum_past": df["meteo_hum_past"].tolist() if "meteo_hum_past" in df else [],
@@ -164,18 +171,26 @@ async def admin_dashboard(request: Request):
                     "int_hum": df["int_hum"].tolist() if "int_hum" in df else [],
                     "cor_hum": df["cor_hum"].tolist() if "cor_hum" in df else [],
                     "meteo_temp": df["meteo_temp"].tolist() if "meteo_temp" in df else [],
-                    "meteo_hum": df["meteo_hum"].tolist() if "meteo_hum" in df else [],
+                    "meteo_hum": df["meteo_hum"].tolist() if "meteo_hum_hum" in df else [],
                     "wind_speed": df["wind_speed"].tolist() if "wind_speed" in df else [],
-                    "window_open_flag": df["window_open_flag"].fillna(0).astype(int).tolist()
-                }
+                    "window_open_flag": df["window_open_flag"].fillna(0).astype(int).tolist(),
+                    "cloud_cover_past": df["cloud_cover_past"].tolist() if "cloud_cover_past" in df else [],
+                    "cloud_cover_forecast": df["cloud_cover_forecast"].tolist() if "cloud_cover_forecast" in df else [],
+                    "direct_radiation_past": df["direct_radiation_past"].tolist() if "direct_radiation_past" in df else [],
+                    "direct_radiation_forecast": df["direct_radiation_forecast"].tolist() if "direct_radiation_forecast" in df else [],
+                    "cloud_cover": df["cloud_cover"].tolist() if "cloud_cover" in df else [],
+                    "direct_radiation": df["direct_radiation"].tolist() if "direct_radiation" in df else [],
+                    "int_temp_rf": df["predicted_int_temp_rf"].tolist(),
+                    "int_temp_std": df["predicted_int_temp_std"].tolist(),
+                })
 
-                drop_cols = [c for c in ["dt", "predicted_ext_temp", "predicted_int_temp_closed", "predicted_int_temp_open", "ext_temp_pred_past", "int_temp_min_pred_past", "ext_temp_forecast_mode", "int_temp_closed_forecast_mode", "int_temp_open_forecast_mode", "is_fit_ready", "thermal_mode"] if c in df.columns]
+                drop_cols = [c for c in ["dt", "predicted_ext_temp", "predicted_int_temp_rf", "predicted_int_temp_std", "ext_temp_forecast_mode", "int_temp_rf_forecast_mode", "int_temp_std_masked", "is_fit_ready", "thermal_mode"] if c in df.columns]
                 df_tail = df.drop(columns=drop_cols, errors="ignore").tail(50).sort_values(by="timestamp", ascending=False)
                 records = df_tail.to_dict(orient="records")
                 columns = list(df_tail.columns)
 
         except Exception as e:
-            print(f"Error reading database for stats: {e}")
+                print(f"Error reading database for stats: {e}")
 
     return templates.TemplateResponse(
         request,
@@ -199,7 +214,6 @@ async def admin_dashboard(request: Request):
 async def trigger_collect(days: int = 10):
     try:
         async with httpx.AsyncClient() as client:
-            # On transmet le paramètre ?days=X au data-collector
             await client.get(f"{COLLECTOR_URL}/api/collect?days={days}", timeout=60.0)
     except Exception as e:
         print(f"Failed to trigger collection: {e}")
@@ -216,7 +230,6 @@ async def trigger_train():
 
 @app.get("/trigger-clear")
 async def trigger_clear():
-    """Delete the SQLite database and all trained ML models to completely reset state."""
     try:
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
@@ -267,12 +280,10 @@ async def logs_page(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def main_dashboard(request: Request):
-    """Affiche la page principale épurée (ApexCharts, vue 24h/7d, temps réel)."""
     return templates.TemplateResponse(request, "index.html", {"active_page": "graph"})
 
 @app.get("/widget", response_class=HTMLResponse)
 async def main_dashboard_widget(request: Request):
-    """Affiche la page principale épurée (ApexCharts, vue 24h/7d, temps réel)."""
     return templates.TemplateResponse(request, "widget.html")
 
 @app.get("/api-meteo/data/{version}")
@@ -304,7 +315,9 @@ async def get_apex_metrics(request: Request, version: str, mode: str = "simple",
 
     ha_data_dict = {key: [] for key in current_entities.keys()}
     meteo_points = []
-    forecast_ext_dict, forecast_int_closed_dict, forecast_int_open_dict = {}, {}, {}
+    forecast_ext_dict = {}
+    raw_smart_series = []
+    analysis_data = {}
 
     try:
         conn_db = sqlite3.connect(DB_PATH)
@@ -383,20 +396,18 @@ async def get_apex_metrics(request: Request, version: str, mode: str = "simple",
             print(f"ML Ext Forecast unreachable: {e}")
 
         try:
-            resp_closed = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=0")
-            if resp_closed.status_code == 200:
-                for item in resp_closed.json().get("forecasts", []):
-                    forecast_int_closed_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+            resp_smart = await client.get(f"{ML_ENGINE_URL}/api/forecast/smart?scope=all")
+            if resp_smart.status_code == 200:
+                raw_smart_series = resp_smart.json().get("smart_series", [])
         except Exception as e:
-            print(f"ML Int Closed Forecast unreachable: {e}")
+            print(f"ML Smart Forecast unreachable: {e}")
 
         try:
-            resp_open = await client.get(f"{ML_ENGINE_URL}/api/forecast/int?window_open=1")
-            if resp_open.status_code == 200:
-                for item in resp_open.json().get("forecasts", []):
-                    forecast_int_open_dict[item["timestamp"]] = item["predicted_int_temp_min"]
+            resp_analysis = await client.get(f"{ML_ENGINE_URL}/api/forecast/analysis")
+            if resp_analysis.status_code == 200:
+                analysis_data = resp_analysis.json()
         except Exception as e:
-            print(f"ML Int Open Forecast unreachable: {e}")
+            print(f"ML Analysis unreachable: {e}")
 
     def format_series(points_list):
         series = []
@@ -405,8 +416,7 @@ async def get_apex_metrics(request: Request, version: str, mode: str = "simple",
             series.append([ts_ms, val])
         return series
 
-    sim_ext_points, sim_int_closed_points, sim_int_open_points = [], [], []
-
+    sim_ext_points = []
     for ts_str, val in forecast_ext_dict.items():
         try:
             dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
@@ -418,27 +428,18 @@ async def get_apex_metrics(request: Request, version: str, mode: str = "simple",
                     sim_ext_points.append((dt, float(val)))
         except: pass
 
-    for ts_str, val in forecast_int_closed_dict.items():
-        try:
-            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-            if ml == "eval":
-                if start_time <= dt <= now_utc:
-                    sim_int_closed_points.append((dt, float(val)))
-            else:
-                if dt > now_utc and dt <= end_time:
-                    sim_int_closed_points.append((dt, float(val)))
-        except: pass
+    filtered_smart_series = []
+    for pt in raw_smart_series:
+        ts_ms = pt[0]
+        val = pt[1]
+        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
 
-    for ts_str, val in forecast_int_open_dict.items():
-        try:
-            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-            if ml == "eval":
-                if start_time <= dt <= now_utc:
-                    sim_int_open_points.append((dt, float(val)))
-            else:
-                if dt > now_utc and dt <= end_time:
-                    sim_int_open_points.append((dt, float(val)))
-        except: pass
+        if ml == "eval":
+            if start_time <= dt <= now_utc:
+                filtered_smart_series.append([ts_ms, float(val)])
+        else:
+            if dt > now_utc and dt <= end_time:
+                filtered_smart_series.append([ts_ms, float(val)])
 
     def get_last_val(key):
         valid = [v for dt, v in ha_data_dict.get(key, []) if dt <= now_utc]
@@ -458,14 +459,12 @@ async def get_apex_metrics(request: Request, version: str, mode: str = "simple",
         }
 
     ext_pred_name = "Extérieur (prévu)" if ml == "forecast" else "Extérieur (ML passé)"
-    int_closed_name = "Intérieur min (Confinement)" if ml == "forecast" else "Intérieur min (Confinement passé)"
-    int_open_name = "Intérieur min (Aération)" if ml == "forecast" else "Intérieur min (Aération passé)"
+    int_pred_name = "Intérieur (Modèle prévu)" if ml == "forecast" else "Intérieur (Modèle passé)"
 
     series_data = [
         {"name": "Extérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["ext_temp"] if dt <= now_utc])},
         {"name": ext_pred_name, "data": format_series(sim_ext_points)},
-        {"name": int_closed_name, "data": format_series(sim_int_closed_points)},
-        {"name": int_open_name, "data": format_series(sim_int_open_points)},
+        {"name": int_pred_name, "data": filtered_smart_series},
         {"name": "Open-Meteo", "data": meteo_points}
     ]
 
@@ -478,23 +477,31 @@ async def get_apex_metrics(request: Request, version: str, mode: str = "simple",
     series_data = [s for s in series_data if len(s["data"]) > 0]
     data_generated_at = datetime.now(timezone.utc).isoformat()
 
+    # Format the opening time strictly to ISO 8601 UTC for JavaScript
+    inversion_time_raw = analysis_data.get("opening_time")
+    inversion_time_iso = None
+    if inversion_time_raw:
+        inversion_time_iso = str(inversion_time_raw).replace(" ", "T")
+        if not inversion_time_iso.endswith("Z") and "+" not in inversion_time_iso:
+            inversion_time_iso += "Z"
+
     return {
         "series": series_data,
         "current": current_values,
-        "inversion_time": None,
-        "peak_message": None,
+        "inversion_time": inversion_time_iso,
+        "peak_message": analysis_data.get("peak_message"),
         "generated_at": data_generated_at
     }
 
+
 @app.get("/validation/error", response_class=HTMLResponse)
-async def validation_error_page(request: Request, model: str = "ext", filter: str = "all"):
+async def validation_error_page(request: Request, model: str = "ext"):
     db_exists = os.path.exists(DB_PATH)
     chart_payload = {}
     metrics_summary = {"mean_error": "N/A", "mae": "N/A", "rmse": "N/A"}
 
     if db_exists:
         try:
-            # 1. Récupération des métriques annotées directement depuis l'API du ml-engine
             df_metrics = pd.DataFrame()
             async with httpx.AsyncClient() as client:
                 try:
@@ -513,13 +520,24 @@ async def validation_error_page(request: Request, model: str = "ext", filter: st
             if not df_metrics.empty:
                 forecast_dict = {}
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/{model}", timeout=5.0)
-                    if resp.status_code == 200:
-                        for item in resp.json().get("forecasts", []):
-                            val_pred = item.get(f"predicted_{model}_temp") if model == "ext" else item.get(f"predicted_{model}_temp_min")
-                            forecast_dict[item["timestamp"]] = val_pred
+                    if model == "ext":
+                        resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext", timeout=5.0)
+                        if resp.status_code == 200:
+                            for item in resp.json().get("forecasts", []):
+                                forecast_dict[item["timestamp"]] = item.get("predicted_ext_temp")
+                        col_name = "ext_temp"
+                    else:
+                        # On interroge l'endpoint séparé pour récupérer STD ou RF selon le choix
+                        resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/int", timeout=10.0)
+                        if resp.status_code == 200:
+                            for item in resp.json().get("forecasts", []):
+                                ts_str = item["timestamp"]
+                                if model == "int_std":
+                                    forecast_dict[ts_str] = item.get("predicted_int_temp_std")
+                                else:
+                                    forecast_dict[ts_str] = item.get("predicted_int_temp_rf")
+                        col_name = "int_temp_min"
 
-                col_name = "ext_temp" if model == "ext" else "int_temp_min"
                 if col_name not in df_metrics.columns:
                     col_name = "ext" if model == "ext" else "int"
 
@@ -528,33 +546,25 @@ async def validation_error_page(request: Request, model: str = "ext", filter: st
                     df_valid = df_metrics.dropna(subset=[col_name, "pred"]).copy()
 
                     if not df_valid.empty:
-                        # Utilisation directe du window_open_flag propre fourni par le ml-engine
                         if "window_open_flag" in df_valid.columns:
-                            df_valid["window_open"] = df_valid["window_open_flag"]
+                            df_valid["window_open"] = df_window_open = df_valid["window_open_flag"]
                         else:
                             df_valid["window_open"] = 0
 
-                        if model == "int":
-                            if filter == "int_open":
-                                df_valid = df_valid[df_valid["window_open"] == 1]
-                            elif filter == "int_closed":
-                                df_valid = df_valid[df_valid["window_open"] == 0]
+                        df_valid["error"] = df_valid[col_name] - df_valid["pred"]
+                        errors = df_valid["error"]
 
-                        if not df_valid.empty:
-                            df_valid["error"] = df_valid[col_name] - df_valid["pred"]
+                        metrics_summary["mean_error"] = round(float(errors.mean()), 2)
+                        metrics_summary["mae"] = round(float(errors.abs().mean()), 2)
+                        metrics_summary["rmse"] = round(float(np.sqrt((errors ** 2).mean())), 2)
 
-                            errors = df_valid["error"]
-                            metrics_summary["mean_error"] = round(float(errors.mean()), 2)
-                            metrics_summary["mae"] = round(float(errors.abs().mean()), 2)
-                            metrics_summary["rmse"] = round(float(np.sqrt((errors ** 2).mean())), 2)
-
-                            chart_payload = {
-                                "timestamps": df_valid["timestamp"].tolist(),
-                                "errors": df_valid["error"].round(2).tolist(),
-                                "window_open": df_valid["window_open"].tolist(),
-                                "thermal_mode": df_valid["thermal_mode"].tolist() if "thermal_mode" in df_valid.columns else [],
-                                "model": model
-                            }
+                        chart_payload = {
+                            "timestamps": df_valid["timestamp"].tolist(),
+                            "errors": df_valid["error"].round(2).tolist(),
+                            "window_open": df_valid["window_open"].tolist(),
+                            "thermal_mode": df_valid["thermal_mode"].tolist() if "thermal_mode" in df_valid.columns else [],
+                            "model": model
+                        }
         except Exception as e:
             print(f"Error generating error validation view: {e}")
 
@@ -565,11 +575,11 @@ async def validation_error_page(request: Request, model: str = "ext", filter: st
             "active_page": "validation",
             "db_exists": db_exists,
             "current_model": model,
-            "current_filter": filter,
             "metrics_summary": metrics_summary,
             "chart_payload": chart_payload
         }
     )
+
 
 @app.get("/api/backfill-co2")
 async def backfill_co2(days: int = 30):

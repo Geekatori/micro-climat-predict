@@ -34,16 +34,29 @@ def migrate_db(conn):
     cursor.execute("PRAGMA table_info(metrics)")
     columns = [column[1] for column in cursor.fetchall()]
 
-    # Add int_temp_min column if it does not exist
     if "int_temp_min" not in columns:
         conn.execute("ALTER TABLE metrics ADD COLUMN int_temp_min REAL")
         print("Migration: Added 'int_temp_min' column to metrics table.")
 
-    # Add co2 column if it does not exist
     if "co2" not in columns:
         conn.execute("ALTER TABLE metrics ADD COLUMN co2 REAL")
         print("Migration: Added 'co2' column to metrics table.")
 
+    if "cloud_cover" not in columns:
+        conn.execute("ALTER TABLE metrics ADD COLUMN cloud_cover REAL")
+        print("Migration: Added 'cloud_cover' column to metrics table.")
+
+    if "direct_radiation" not in columns:
+        conn.execute("ALTER TABLE metrics ADD COLUMN direct_radiation REAL")
+        print("Migration: Added 'direct_radiation' column to metrics table.")
+
+    cursor.execute("PRAGMA table_info(weather_forecasts)")
+    forecast_columns = [column[1] for column in cursor.fetchall()]
+
+    if "cloud_cover" not in forecast_columns:
+        conn.execute("ALTER TABLE weather_forecasts ADD COLUMN cloud_cover REAL")
+    if "direct_radiation" not in forecast_columns:
+        conn.execute("ALTER TABLE weather_forecasts ADD COLUMN direct_radiation REAL")
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -62,6 +75,8 @@ def init_db():
             meteo_temp REAL,
             meteo_hum REAL,
             wind_speed REAL,
+            cloud_cover REAL,
+            direct_radiation REAL,
             int_temp_min REAL
         )
     """)
@@ -70,7 +85,9 @@ def init_db():
             timestamp TEXT PRIMARY KEY,
             meteo_temp REAL,
             meteo_hum REAL,
-            wind_speed REAL
+            wind_speed REAL,
+            cloud_cover REAL,
+            direct_radiation REAL
         )
     """)
     conn.execute("""
@@ -141,7 +158,7 @@ async def fetch_weather_data_days(days: int):
             try:
                 print(f"[{datetime.now()}] Fetching Open-Meteo data (Attempt {attempt + 1}/{max_retries})...")
                 meteo_resp = await client.get(
-                    f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days={days}&forecast_days=7",
+                    f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,cloud_cover,direct_radiation&past_days={days}&forecast_days=7",
                     timeout=10.0
                 )
                 print(f"[{datetime.now()}] Open-Meteo response status: {meteo_resp.status_code}")
@@ -149,9 +166,12 @@ async def fetch_weather_data_days(days: int):
                 if meteo_resp.status_code == 200:
                     data = meteo_resp.json()["hourly"]
                     print(f"[{datetime.now()}] Successfully received {len(data.get('time', []))} hourly points.")
-                    for t_str, temp, hum, wind in zip(data["time"], data["temperature_2m"], data["relative_humidity_2m"], data["wind_speed_10m"]):
+                    for t_str, temp, hum, wind, clouds, radiation in zip(
+                        data["time"], data["temperature_2m"], data["relative_humidity_2m"],
+                        data["wind_speed_10m"], data["cloud_cover"], data["direct_radiation"]
+                    ):
                         dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
-                        point = [dt, float(temp), float(hum), float(wind or 0.0)]
+                        point = [dt, float(temp), float(hum), float(wind or 0.0), float(clouds or 0.0), float(radiation or 0.0)]
 
                         if dt <= now_utc:
                             meteo_past_points.append(point)
@@ -191,7 +211,7 @@ async def run_collection(days: int = None):
                 dfs_past.append(df.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill())
 
         if meteo_past_points:
-            df_meteo_past = pd.DataFrame(meteo_past_points, columns=["timestamp", "meteo_temp", "meteo_hum", "wind_speed"])
+            df_meteo_past = pd.DataFrame(meteo_past_points, columns=["timestamp", "meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation"])
             df_meteo_past["timestamp"] = pd.to_datetime(df_meteo_past["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
             df_meteo_past = df_meteo_past.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill()
             dfs_past.append(df_meteo_past)
@@ -199,7 +219,7 @@ async def run_collection(days: int = None):
         if dfs_past:
             # Concaténation globale et propagation propre de la dernière valeur pour chaque capteur (pas de croisement)
             final_past_df = pd.concat(dfs_past, axis=1)
-            final_past_df = final_past_df.ffill().bfill().reset_index()
+            final_past_df = final_past_df.ffill().reset_index()
 
             # Always compute int_temp_min dynamically as the minimum between int_temp and cor_temp
             if "int_temp" in final_past_df.columns and "cor_temp" in final_past_df.columns:
@@ -215,11 +235,11 @@ async def run_collection(days: int = None):
             conn.execute("""
                 INSERT OR IGNORE INTO metrics (
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, int_temp_min
+                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
                 )
                 SELECT
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, int_temp_min
+                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
                 FROM metrics_temp;
             """)
 
@@ -237,6 +257,8 @@ async def run_collection(days: int = None):
                     meteo_temp = COALESCE(metrics_temp.meteo_temp, metrics.meteo_temp),
                     meteo_hum = COALESCE(metrics_temp.meteo_hum, metrics.meteo_hum),
                     wind_speed = COALESCE(metrics_temp.wind_speed, metrics.wind_speed),
+                    cloud_cover = COALESCE(metrics_temp.cloud_cover, metrics.cloud_cover),
+                    direct_radiation = COALESCE(metrics_temp.direct_radiation, metrics.direct_radiation),
                     int_temp_min = COALESCE(metrics_temp.int_temp_min, metrics.int_temp_min)
                 FROM metrics_temp
                 WHERE metrics.timestamp = metrics_temp.timestamp;
@@ -247,8 +269,9 @@ async def run_collection(days: int = None):
             conn.close()
 
         # 2. Process Future Weather Forecasts (Volatile Cache)
+        # 2. Process Future Weather Forecasts (Volatile Cache)
         if meteo_future_points:
-            df_meteo_future = pd.DataFrame(meteo_future_points, columns=["timestamp", "meteo_temp", "meteo_hum", "wind_speed"])
+            df_meteo_future = pd.DataFrame(meteo_future_points, columns=["timestamp", "meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation"])
             df_meteo_future["timestamp"] = pd.to_datetime(df_meteo_future["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
             df_meteo_future = df_meteo_future.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill()
 
