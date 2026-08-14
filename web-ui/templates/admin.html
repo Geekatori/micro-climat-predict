@@ -109,17 +109,22 @@
             const ctx = document.getElementById('tempChart').getContext('2d');
 
             const comprehensiveDatasets = [
-                { label: "Extérieur Réel (°C)", data: rawChartData.ext_temp, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Extérieur Prédit", data: rawChartData.ext_temp_forecast_mode, borderColor: "#fca5a5", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true},
-                { label: "Intérieur Min Réel (°C)", data: rawChartData.int_temp_min, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
-                { label: "Intérieur Min Prédit", data: rawChartData.int_temp_min_forecast_mode, borderColor: "#93c5fd", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
-                { label: "Corridor (°C)", data: rawChartData.cor_temp, borderColor: "#8b5cf6", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
-                { label: "Open-Meteo (°C)", data: rawChartData.meteo_temp, borderColor: "#10b981", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
-                { label: "Open-Meteo (Prévision)", data: rawChartData.meteo_temp_forecast, borderColor: "#6ee7b7", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true},
-                { label: "Humidité Ext (%)", data: rawChartData.ext_hum, borderColor: "#06b6d4", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Humidité Int Min (%)", data: rawChartData.int_hum, borderColor: "#38bdf8", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Humidité Cor (%)", data: rawChartData.cor_hum, borderColor: "#6366f1", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
-                { label: "Vent (km/h)", data: rawChartData.wind_speed, borderColor: "#f97316", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                // --- Capteurs de Température (Couleurs de référence harmonisées) ---
+                { label: "Extérieur Réel (°C)", data: rawChartData.ext_temp, borderColor: "#f39c12", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Extérieur Prédit", data: rawChartData.ext_temp_forecast_mode, borderColor: "#f39c12", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Intérieur Min Réel (°C)", data: rawChartData.int_temp_min, borderColor: "#a855f7", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y' },
+                { label: "Intérieur Min Prédit", data: rawChartData.int_temp_min_forecast_mode, borderColor: "#38bdf8", borderDash: [5, 5], borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Corridor (°C)", data: rawChartData.cor_temp, borderColor: "#3498db", borderWidth: 2, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Open-Meteo (°C)", data: rawChartData.meteo_temp, borderColor: "#64748b", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+                { label: "Open-Meteo (Prévision)", data: rawChartData.meteo_temp_forecast, borderColor: "#64748b", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y', hidden: true },
+
+                // --- Humidité & Vent (Distingués avec des teintes vertes/émeraude) ---
+                { label: "Humidité Ext (%)", data: rawChartData.ext_hum, borderColor: "#10b981", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Humidité Int Min (%)", data: rawChartData.int_hum, borderColor: "#34d399", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Humidité Cor (%)", data: rawChartData.cor_hum, borderColor: "#059669", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+                { label: "Vent (km/h)", data: rawChartData.wind_speed, borderColor: "#84cc16", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y1', hidden: true },
+
+                // --- CO2 (Inchangé) ---
                 { label: "CO2 (ppm)", data: rawChartData.co2 || [], borderColor: "#fb7185", borderWidth: 1.5, pointRadius: 0, tension: 0.1, spanGaps: true, yAxisID: 'y2', hidden: false }
             ];
 
@@ -163,6 +168,29 @@
                 }
             };
 
+            const crosshairPlugin = {
+                id: 'crosshairPlugin',
+                afterDraw: (chart) => {
+                    if (chart.tooltip._active && chart.tooltip._active.length) {
+                        const ctx = chart.ctx;
+                        const activePoint = chart.tooltip._active[0];
+                        const x = activePoint.element.x;
+                        const topY = chart.chartArea.top;
+                        const bottomY = chart.chartArea.bottom;
+
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.moveTo(x, topY);
+                        ctx.lineTo(x, bottomY);
+                        ctx.lineWidth = 1;
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; // Ligne blanche semi-transparente
+                        ctx.setLineDash([4, 4]); // Effet tireté (optionnel)
+                        ctx.stroke();
+                        ctx.restore();
+                    }
+                }
+            };
+
             window.myChart = new Chart(ctx, {
                 type: 'line',
                 data: { labels: localTimestamps, datasets: comprehensiveDatasets },
@@ -174,16 +202,43 @@
                     },
                     plugins: {
                         legend: { labels: { color: '#e5e7eb', boxWidth: 12 } },
+                        // --- Configuration du Tooltip et du Zoom ---
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                // Formate proprement la date et l'heure dans l'infobulle au survol
+                                title: function(tooltipItems) {
+                                    let d = new Date(tooltipItems[0].parsed.x);
+                                    return d.toLocaleString('fr-FR', {
+                                        weekday: 'short',
+                                        day: 'numeric',
+                                        month: 'short',
+                                        year: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit'
+                                    });
+                                }
+                            }
+                        },
                         zoom: {
-                            pan: { enabled: true, mode: 'x', speed: 20 },
-                            zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x' }
+                            pan: {
+                                enabled: true,
+                                mode: 'x',        // Déplacement horizontal par clic-glisser
+                                modifierKey: null // Pas besoin de touche clavier, le clic-glisser direct suffit
+                            },
+                            zoom: {
+                                wheel: { enabled: true, speed: 0.1 },
+                                pinch: { enabled: true },
+                                mode: 'x'
+                            }
                         }
                     },
                     scales: {
                         x: {
                             type: 'time',
                             min: localTimestamps[0],
-                            max: new Date(),
+                            max: new Date(), // Bloqué à "maintenant" par défaut au chargement
                             time: {
                                 parser: 'yyyy-MM-dd HH:mm:ss',
                                 displayFormats: { hour: 'HH:mm', day: 'dd MMM' }
@@ -203,7 +258,7 @@
                         }
                     }
                 },
-                plugins: [thermalBandPlugin]
+                plugins: [thermalBandPlugin, crosshairPlugin]
             });
         </script>
         {% endif %}
