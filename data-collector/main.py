@@ -208,27 +208,35 @@ async def run_collection():
             conn = sqlite3.connect(DB_PATH)
             final_past_df.to_sql("metrics_temp", conn, if_exists="replace", index=False)
             conn.execute("""
-                INSERT INTO metrics (
+                INSERT OR IGNORE INTO metrics (
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
                     cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, int_temp_min
                 )
                 SELECT
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
                     cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, int_temp_min
-                FROM metrics_temp
-                ON CONFLICT(timestamp) DO UPDATE SET
-                    ext_temp = COALESCE(excluded.ext_temp, metrics.ext_temp),
-                    ext_hum = COALESCE(excluded.ext_hum, metrics.ext_hum),
-                    int_temp = COALESCE(excluded.int_temp, metrics.int_temp),
-                    int_hum = COALESCE(excluded.int_hum, metrics.int_hum),
-                    cor_temp = COALESCE(excluded.cor_temp, metrics.cor_temp),
-                    cor_hum = COALESCE(excluded.cor_hum, metrics.cor_hum),
-                    co2 = COALESCE(excluded.co2, metrics.co2),
-                    meteo_temp = COALESCE(excluded.meteo_temp, metrics.meteo_temp),
-                    meteo_hum = COALESCE(excluded.meteo_hum, metrics.meteo_hum),
-                    wind_speed = COALESCE(excluded.wind_speed, metrics.wind_speed),
-                    int_temp_min = COALESCE(excluded.int_temp_min, metrics.int_temp_min);
+                FROM metrics_temp;
             """)
+
+            # 2. On met à jour les lignes existantes en évitant d'écraser par du NULL
+            conn.execute("""
+                UPDATE metrics
+                SET
+                    ext_temp = COALESCE(metrics_temp.ext_temp, metrics.ext_temp),
+                    ext_hum = COALESCE(metrics_temp.ext_hum, metrics.ext_hum),
+                    int_temp = COALESCE(metrics_temp.int_temp, metrics.int_temp),
+                    int_hum = COALESCE(metrics_temp.int_hum, metrics.int_hum),
+                    cor_temp = COALESCE(metrics_temp.cor_temp, metrics.cor_temp),
+                    cor_hum = COALESCE(metrics_temp.cor_hum, metrics.cor_hum),
+                    co2 = COALESCE(metrics_temp.co2, metrics.co2),
+                    meteo_temp = COALESCE(metrics_temp.meteo_temp, metrics.meteo_temp),
+                    meteo_hum = COALESCE(metrics_temp.meteo_hum, metrics.meteo_hum),
+                    wind_speed = COALESCE(metrics_temp.wind_speed, metrics.wind_speed),
+                    int_temp_min = COALESCE(metrics_temp.int_temp_min, metrics.int_temp_min)
+                FROM metrics_temp
+                WHERE metrics.timestamp = metrics_temp.timestamp;
+            """)
+
             conn.execute("DROP TABLE metrics_temp")
             conn.commit()
             conn.close()
