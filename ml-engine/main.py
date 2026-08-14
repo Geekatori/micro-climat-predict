@@ -226,10 +226,15 @@ def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e
 
 def optimize_thermal_inertia(df: pd.DataFrame):
     # Centered 'a' around the new found minimum, and expanded 'e' upwards
+    # temperature exérieure (couplée au vent)
     a_grid = [0.000008, 0.000012, 0.000016]
+    # radiation directe
     b_grid = [0.02, 0.03, 0.045]
+    # cave
     c_grid = [0.009, 0.011, 0.013]
+    # effet CO2 (activité)
     d_grid = [0.00007, 0.0001, 0.00015]
+    # élévation du soleil
     e_grid = [0.032, 0.038, 0.045]
 
     best_params = {"a": 0.000012, "b": 0.03, "c": 0.011, "d": 0.0001, "e": 0.035}
