@@ -182,6 +182,8 @@
                     scales: {
                         x: {
                             type: 'time',
+                            min: localTimestamps[0],
+                            max: new Date(),
                             time: {
                                 parser: 'yyyy-MM-dd HH:mm:ss',
                                 displayFormats: { hour: 'HH:mm', day: 'dd MMM' }
