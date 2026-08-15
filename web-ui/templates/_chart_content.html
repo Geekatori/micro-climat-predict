@@ -39,9 +39,11 @@
 
     <div id="chart" class="w-full flex-grow"></div>
 
-    <span id="data-freshness" class="absolute bottom-2 right-4 text-[9px] md:text-[10px] text-gray-500 italic hidden pointer-events-none">
-        Données : --
-    </span>
+    <div class="text-xs text-gray-400 flex gap-4">
+    <span id="fetch-time">Mis à jour : --</span>
+    <span id="collection-time">Dernière collecte : --</span>
+    <span id="training-time">Dernier entraînement : --</span>
+</div>
 </div>
 
 <script>
@@ -52,31 +54,36 @@
             this.currentValues = null;
             this.forecastSeries = null;
             this.analysisData = null;
+            this.lastCollection = "--";
+            this.lastTraining = "--";
 
             this.loadedHistoryRange = null;
             this.loadedMode = null;
             this.loadedMlMode = null;
         }
 
-        async loadRequiredData(range, mode, mlMode, forceRefresh = false) {
-            const promises = [];
-
-            // 1. History check
+        async loadHistoryOnly(range, mode, forceRefresh = false) {
             const needsHistory = forceRefresh || !this.historySeries || this.loadedHistoryRange !== range || this.loadedMode !== mode;
             if (needsHistory) {
-                promises.push(
-                    fetch(`/api-meteo/history/${range}?mode=${mode}`)
-                        .then(res => res.json())
-                        .then(data => {
-                            this.historySeries = data.series || [];
-                            this.currentValues = data.current || {};
-                            this.loadedHistoryRange = range;
-                            this.loadedMode = mode;
-                        })
-                );
+                const res = await fetch(`/api-meteo/history/${range}?mode=${mode}`);
+                const data = await res.json();
+                this.historySeries = data.series || [];
+                this.currentValues = data.current || {};
+                this.loadedHistoryRange = range;
+                this.loadedMode = mode;
             }
+            return {
+                series: [...(this.historySeries || []), ...(this.forecastSeries || [])],
+                current: this.currentValues,
+                inversion_time: this.analysisData?.inversion_time,
+                peak_message: this.analysisData?.peak_message,
+                generated_at: new Date().toISOString()
+            };
+        }
 
-            // 2. Forecast check
+        async loadForecastAndAnalysis(mlMode, forceRefresh = false) {
+            const promises = [];
+
             const needsForecast = forceRefresh || !this.forecastSeries || this.loadedMlMode !== mlMode;
             if (needsForecast) {
                 promises.push(
@@ -89,7 +96,6 @@
                 );
             }
 
-            // 3. Analysis check (quick fetch, always run on refresh or if empty)
             const needsAnalysis = forceRefresh || !this.analysisData;
             if (needsAnalysis) {
                 promises.push(
@@ -112,6 +118,31 @@
                 peak_message: this.analysisData?.peak_message,
                 generated_at: new Date().toISOString()
             };
+        }
+
+        async loadStatus() {
+            try {
+                const [statusRes, trainRes] = await Promise.all([
+                    fetch('/api-meteo/status/collection'),
+                    fetch('/api-meteo/status/training')
+                ]);
+
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    if (statusData.last_collection) {
+                        this.lastCollection = statusData.last_collection;
+                    }
+                }
+
+                if (trainRes.ok) {
+                    const trainData = await trainRes.json();
+                    if (trainData.last_training) {
+                        this.lastTraining = trainData.last_training;
+                    }
+                }
+            } catch (error) {
+                console.error("Error loading system status:", error);
+            }
         }
     }
 
@@ -155,31 +186,56 @@
         let apiVersion = (currentZoomMode === '7d') ? '7d' : '24h';
 
         try {
-            // DataStore handles deciding if HTTP calls are needed
-            const data = await dataStore.loadRequiredData(apiVersion, mode, mlMode, forceRefresh);
+            // 1. FIRST STEP: Immediate display of history and current values
+            const initialData = await dataStore.loadHistoryOnly(apiVersion, mode, forceRefresh);
 
-            // Update Page Title
-            let titleText = `Ext: ${data.current.ext || '--'}`;
-            if (mode === 'detailed') {
-                titleText += ` | Couloir: ${data.current.cor || '--'} | Int: ${data.current.int || '--'}`;
-            } else {
-                titleText += ` | Int: ${data.current.int || '--'}`;
-            }
-            document.title = titleText;
+            updateTitleAndUI(initialData);
+            processAndRenderChart(initialData);
 
-            // Update Freshness Indicator
-            const freshEl = document.getElementById('data-freshness');
-            if (freshEl && data.generated_at) {
-                let d = new Date(data.generated_at);
-                let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-                freshEl.innerText = `Mis à jour à ${timeStr}`;
-                freshEl.style.display = 'block';
-            }
+            // Fetch system statuses in parallel with forecast and analysis
+            dataStore.loadStatus().then(() => {
+                updateStatusUI();
+            });
 
-            processAndRenderChart(data);
+            // 2. SECOND STEP: Background load of forecasts and analysis
+            const fullData = await dataStore.loadForecastAndAnalysis(mlMode, forceRefresh);
+
+            updateTitleAndUI(fullData);
+            processAndRenderChart(fullData);
 
         } catch (err) {
             console.error("Error loading data:", err);
+        }
+    }
+
+    function updateTitleAndUI(data) {
+        let titleText = `Ext: ${data.current?.ext || '--'}`;
+        if (mode === 'detailed') {
+            titleText += ` | Couloir: ${data.current?.cor || '--'} | Int: ${data.current?.int || '--'}`;
+        } else {
+            titleText += ` | Int: ${data.current?.int || '--'}`;
+        }
+        document.title = titleText;
+
+        const freshEl = document.getElementById('data-freshness');
+        if (freshEl && data.generated_at) {
+            let d = new Date(data.generated_at);
+            let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            freshEl.innerText = `Mis à jour à ${timeStr}`;
+            freshEl.style.display = 'block';
+        }
+    }
+
+    // Helper to update collection and training dates in the DOM
+    function updateStatusUI() {
+        const collectionEl = document.getElementById('collection-time');
+        if (collectionEl) {
+            collectionEl.innerText = `Dernière collecte : ${dataStore.lastCollection}`;
+        }
+
+        const trainingEl = document.getElementById('training-time');
+        if (trainingEl) {
+            trainingEl.innerText = `Dernier entraînement : ${dataStore.lastTraining}`;
         }
     }
 

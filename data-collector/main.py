@@ -421,3 +421,17 @@ async def get_open_meteo():
     except Exception as e:
         print(f"Database read error for Open-Meteo: {e}")
         return {"status": "error", "message": str(e)}
+
+@app.get("/api/status/last-collection")
+def get_last_collection():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+
+        last_ts = row[0] if row else None
+        return {"status": "success", "last_collection": last_ts}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

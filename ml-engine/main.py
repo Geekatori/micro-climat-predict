@@ -758,3 +758,17 @@ async def get_annotated_metrics():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/status/last-training")
+def get_last_training():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT timestamp FROM training_logs ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+
+        last_train = row[0] if row else None
+        return {"status": "success", "last_training": last_train}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

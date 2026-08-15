@@ -5,7 +5,7 @@ import sqlite3
 import httpx
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, FastAPI, Request, BackgroundTasks
+from fastapi import APIRouter, FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import asyncio
@@ -553,3 +553,21 @@ async def backfill_co2(days: int = 30):
             "points_fetched": len(co2_points),
             "rows_updated_in_db": updated_count
         }
+
+@app.get("/api-meteo/status/collection")
+async def proxy_last_collection():
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.get(f"{COLLECTOR_URL}/api/status/last-collection")
+            return resp.json()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Collector unavailable: {e}")
+
+@app.get("/api-meteo/status/training")
+async def proxy_last_training():
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.get(f"{ML_ENGINE_URL}/api/status/last-training")
+            return resp.json()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"ML Engine unavailable: {e}")
