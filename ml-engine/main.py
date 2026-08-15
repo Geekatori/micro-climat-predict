@@ -520,33 +520,31 @@ def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
     df = df.copy()
     df["_dt"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
 
-    future_df = df[df["_dt"] > now].copy()
-    if future_df.empty:
+    # 1. On autorise l'historique récent (jusqu'à 10h en arrière) pour capter un pic en cours ou tout juste passé
+    start_window = now - pd.Timedelta(hours=10)
+    limit_24h = now + pd.Timedelta(hours=24)
+
+    window_df = df[(df["_dt"] >= start_window) & (df["_dt"] <= limit_24h)].copy()
+    if window_df.empty:
         return {"peak_temp": None, "timestamp": None}
 
-    feat_df = future_df.dropna(subset=FEATURES_EXT)
+    feat_df = window_df.dropna(subset=FEATURES_EXT)
     if feat_df.empty:
         return {"peak_temp": None, "timestamp": None}
 
     feat_df["predicted_ext"] = model_ext.predict(feat_df[FEATURES_EXT])
 
-    # Fenêtre de 24h gérée en Pandas
-    limit_24h = now + pd.Timedelta(hours=24)
-    window_df = feat_df[(feat_df["_dt"] >= now) & (feat_df["_dt"] <= limit_24h)]
-
-    if window_df.empty:
+    if feat_df.empty:
         return {"peak_temp": None, "timestamp": None}
 
-    max_idx = window_df["predicted_ext"].idxmax()
-    if max_idx == window_df.index[0]:
-        return {"peak_temp": None, "timestamp": None}
-
-    peak_row = window_df.loc[max_idx]
+    # 2. On cherche le pic global sur cette large fenêtre (passé récent + 24h futur)
+    max_idx = feat_df["predicted_ext"].idxmax()
+    peak_row = feat_df.loc[max_idx]
     peak_dt = peak_row["_dt"]
 
-    # Soustraction sécurisée via Pandas Timedelta
+    # 3. Filtrage strict : le pic doit se situer entre 0 et 6 heures dans le futur par rapport à 'now'
     time_diff_hours = (peak_dt - now).total_seconds() / 3600.0
-    if time_diff_hours > 6.0:
+    if time_diff_hours < 0.0 or time_diff_hours > 6.0:
         return {"peak_temp": None, "timestamp": None}
 
     raw_ts = str(peak_row["timestamp"])
