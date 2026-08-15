@@ -29,6 +29,13 @@ ENTITIES = {
     "co2": "sensor.temtop_c1plus_temtop_co2",
 }
 
+_db_cache = {}
+
+def clear_db_cache():
+    """Clears the in-memory cache."""
+    _db_cache.clear()
+    print(f"[{datetime.now()}] Database cache cleared.")
+
 def migrate_db(conn):
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(metrics)")
@@ -294,6 +301,8 @@ async def run_collection(days: int = None):
         conn.commit()
         conn.close()
 
+        clear_db_cache()
+
         return {"status": "success", "rows_processed": len(dfs_past[0]) if dfs_past else 0}
 
     except Exception as e:
@@ -308,3 +317,107 @@ async def run_collection(days: int = None):
         except:
             pass
         raise e
+
+@app.get("/api/data/history/{version}")
+async def get_history_data(version: str):
+    """
+    Fetch historical metrics from the database with in-memory caching.
+    version: '24h' or '7d'
+    """
+    cache_key = f"history_{version}"
+
+    # Return cached data if available
+    if cache_key in _db_cache:
+        return _db_cache[cache_key]
+
+    hours_back = 24 if version == '24h' else (7 * 24)
+    start_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql(
+            "SELECT timestamp, ext_temp, int_temp_min, cor_temp, int_temp "
+            "FROM metrics "
+            "WHERE timestamp >= ? "
+            "ORDER BY timestamp ASC",
+            conn,
+            params=(start_str_db,)
+        )
+        conn.close()
+
+        if df.empty:
+            result = {"status": "success", "data": []}
+        else:
+            result = {"status": "success", "data": df.to_dict(orient="records")}
+
+        # Store the result in cache before returning
+        _db_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        print(f"Database read error: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/data/current")
+async def get_current_metrics():
+    """
+    Fetch the most recent metrics row with caching.
+    """
+    cache_key = "current_metrics"
+
+    if cache_key in _db_cache:
+        return _db_cache[cache_key]
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql(
+            "SELECT ext_temp, int_temp_min, cor_temp, int_temp "
+            "FROM metrics "
+            "ORDER BY timestamp DESC LIMIT 1",
+            conn
+        )
+        conn.close()
+
+        if df.empty:
+            result = {"status": "success", "data": {}}
+        else:
+            result = {"status": "success", "data": df.iloc[0].to_dict()}
+
+        _db_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        print(f"Database read error: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/data/openmeteo")
+async def get_open_meteo():
+    """
+    Fetch raw Open-Meteo temperatures (past and future) for the baseline chart curve.
+    """
+    cache_key = "open_meteo_series"
+    if cache_key in _db_cache:
+        return _db_cache[cache_key]
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        # Fetch past and future meteo temps, combining them
+        df_m = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL", conn)
+        df_f = pd.read_sql("SELECT timestamp, meteo_temp FROM weather_forecasts WHERE meteo_temp IS NOT NULL", conn)
+        conn.close()
+
+        # Merge and drop duplicates
+        df = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+
+        if df.empty:
+            result = {"status": "success", "data": []}
+        else:
+            result = {"status": "success", "data": df.to_dict(orient="records")}
+
+        _db_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        print(f"Database read error for Open-Meteo: {e}")
+        return {"status": "error", "message": str(e)}

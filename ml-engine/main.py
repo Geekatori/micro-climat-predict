@@ -13,6 +13,9 @@ from sklearn.model_selection import train_test_split
 from astral import LocationInfo
 from astral.sun import elevation, azimuth
 
+import time
+from functools import wraps
+
 app = FastAPI()
 
 DB_PATH = "/app/data/metrics.db"
@@ -30,6 +33,30 @@ FEATURES_EXT = [
 ]
 
 FEATURES_INT = FEATURES_EXT.copy()
+
+# In-memory dictionary for API response caching
+_api_cache = {}
+
+def cached_endpoint(ttl_seconds=300):
+    """Cache API responses to avoid redundant SQLite queries and computations."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Generate a unique key based on function name and parameters
+            cache_key = f"{func.__name__}_{kwargs}"
+            now = time.time()
+
+            if cache_key in _api_cache:
+                entry = _api_cache[cache_key]
+                if now - entry["timestamp"] < ttl_seconds:
+                    return entry["data"]
+
+            # If expired or missing, execute the function
+            result = await func(*args, **kwargs)
+            _api_cache[cache_key] = {"timestamp": now, "data": result}
+            return result
+        return wrapper
+    return decorator
 
 def clean_for_json(data):
     """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
@@ -376,10 +403,12 @@ def load_and_prepare_data() -> pd.DataFrame:
     return df
 
 @app.on_event("startup")
+@cached_endpoint(ttl_seconds=300)
 async def startup_event():
     init_db()
 
 @app.post("/api/train")
+@cached_endpoint(ttl_seconds=300)
 async def train_models():
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     df = load_and_prepare_data()
@@ -430,6 +459,7 @@ async def train_models():
     }
 
 @app.get("/api/forecast/ext")
+@cached_endpoint(ttl_seconds=300)
 async def forecast_ext():
     if not os.path.exists(MODEL_EXT_PATH):
         raise HTTPException(status_code=400, detail="Exterior model not trained.")
@@ -489,6 +519,7 @@ def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> 
     return None
 
 @app.get("/api/forecast/analysis")
+@cached_endpoint(ttl_seconds=300)
 async def forecast_analysis():
     if not os.path.exists(MODEL_EXT_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
         raise HTTPException(status_code=400, detail="Models not trained.")
@@ -548,6 +579,7 @@ async def forecast_analysis():
 
 
 @app.get("/api/forecast/smart")
+@cached_endpoint(ttl_seconds=300)
 async def forecast_smart(scope: str = "all"):
     """
     Smart curve using STD before the opening marker, and switching permanently
@@ -624,6 +656,7 @@ async def forecast_smart(scope: str = "all"):
     return clean_for_json({"smart_series": smart_series})
 
 @app.get("/api/forecast/int")
+@cached_endpoint(ttl_seconds=300)
 async def forecast_int():
     """
     Provides both Random Forest and STD predictions separately
@@ -660,3 +693,38 @@ async def forecast_int():
         })
 
     return clean_for_json({"status": "success", "forecasts": forecasts})
+
+@app.get("/api/metrics/annotated")
+@cached_endpoint(ttl_seconds=300)
+async def get_annotated_metrics():
+    """
+    Returns the historical data enriched with behavioral flags
+    (window_open_flag, thermal_mode, is_fit_ready) computed on the fly.
+    """
+    try:
+        df = load_and_prepare_data()
+
+        # Select relevant columns to keep the JSON payload light
+        columns_to_keep = [
+            "timestamp", "ext_temp", "int_temp_min", "co2",
+            "window_open_flag", "is_fit_ready", "thermal_mode"
+        ]
+
+        # Keep only columns that actually exist in the dataframe to avoid KeyErrors
+        existing_cols = [col for col in columns_to_keep if col in df.columns]
+        df_annotated = df[existing_cols]
+
+        # Filter out future forecasts (where window_open_flag might just be 0 by default)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        df_annotated = df_annotated[pd.to_datetime(df_annotated["timestamp"]) <= now_utc]
+
+        # Convert timestamps to string for JSON serialization
+        df_annotated.loc[:, "timestamp"] = df_annotated["timestamp"].astype(str)
+
+        return clean_for_json({
+            "status": "success",
+            "data": df_annotated.to_dict(orient="records")
+        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

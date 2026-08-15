@@ -5,9 +5,10 @@ import sqlite3
 import httpx
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+import asyncio
 
 def clean_for_json(data):
     """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
@@ -286,299 +287,180 @@ async def main_dashboard(request: Request):
 async def main_dashboard_widget(request: Request):
     return templates.TemplateResponse(request, "widget.html")
 
-@app.get("/api-meteo/data/{version}")
-async def get_apex_metrics(request: Request, version: str, mode: str = "simple", ml: str = "forecast"):
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    hours_back = 24 if version == '24h' else (7 * 24)
-    start_time = now_utc - timedelta(hours=hours_back)
-    end_time = now_utc + timedelta(days=7 if version == '7d' else 2)
 
-    ha_fetch_start = now_utc - timedelta(hours=1)
-    if ha_fetch_start < start_time:
-        ha_fetch_start = start_time
 
-    start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
-    ha_start_str_db = ha_fetch_start.strftime("%Y-%m-%d %H:%M:%S")
-
-    ha_start_str_api = ha_fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_str_api = end_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    ha_headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
-
-    current_entities = {
-        "ext_temp": ENTITIES["ext_temp"],
-        "int_temp_min": ENTITIES["int_temp_min"],
-        "cor_temp": ENTITIES["cor_temp"],
-        "int_temp": os.getenv("HA_INTERIOR_TEMP", "sensor.0x8c73dafffeda02b5_temperature")
-    }
-    entities_filter = ",".join(current_entities.values())
-
-    ha_data_dict = {key: [] for key in current_entities.keys()}
-    meteo_points = []
-    forecast_ext_dict = {}
-    raw_smart_series = []
-    analysis_data = {}
-
+def parse_ts(ts_str):
+    """Parseur robuste qui accepte à la fois le format ISO et le format SQL."""
+    if not ts_str:
+        return None
+    ts_str = str(ts_str).replace("Z", "+00:00")
     try:
-        conn_db = sqlite3.connect(DB_PATH)
-        df_metrics = pd.read_sql(
-            f"SELECT timestamp, ext_temp, int_temp_min, cor_temp, int_temp "
-            f"FROM metrics "
-            f"WHERE timestamp >= '{start_str_db}' AND timestamp < '{ha_start_str_db}' "
-            f"ORDER BY timestamp ASC",
-            conn_db
-        )
-
-        for _, row in df_metrics.iterrows():
-            try:
-                dt = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
-                if pd.notna(row["ext_temp"]): ha_data_dict["ext_temp"].append((dt, float(row["ext_temp"])))
-                if pd.notna(row["int_temp_min"]): ha_data_dict["int_temp_min"].append((dt, float(row["int_temp_min"])))
-                if pd.notna(row["cor_temp"]): ha_data_dict["cor_temp"].append((dt, float(row["cor_temp"])))
-                if pd.notna(row["int_temp"]): ha_data_dict["int_temp"].append((dt, float(row["int_temp"])))
-            except:
-                continue
+        if "T" in ts_str:
+            return datetime.fromisoformat(ts_str).replace(tzinfo=None)
+        else:
+            return datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
     except Exception as e:
-        print(f"DB Metrics Error: {e}")
+        print(f"Date parsing error for '{ts_str}': {e}")
+        return None
+
+
+@app.get("/api-meteo/history/{version}")
+async def get_history(version: str, mode: str = "simple"):
+    hist_data, curr_data = [], {}
+    errors = []
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        try:
-            url_ha = f"{HA_URL}/api/history/period/{ha_start_str_api}?filter_entity_id={entities_filter}&end_time={end_str_api}"
-            ha_resp = await client.get(url_ha, headers=ha_headers)
-            if ha_resp.status_code == 200:
-                for entity_history in ha_resp.json():
-                    if not entity_history: continue
-                    entity_id = entity_history[0].get("entity_id")
-                    key = next((k for k, v in current_entities.items() if v == entity_id), None)
-                    if key:
-                        for state in entity_history:
-                            try:
-                                dt_raw = datetime.fromisoformat(state["last_updated"].replace("Z", "+00:00"))
-                                dt = dt_raw.astimezone(timezone.utc).replace(tzinfo=None)
-                                val = float(state["state"])
-                                if not math.isnan(val) and not math.isinf(val):
-                                    ha_data_dict[key].append((dt, val))
-                            except: continue
-        except Exception as e:
-            print(f"HA Direct API Error: {e}")
+        # return_exceptions=True empêche un échec de faire crasher les autres
+        results = await asyncio.gather(
+            client.get(f"{COLLECTOR_URL}/api/data/history/{version}"),
+            client.get(f"{COLLECTOR_URL}/api/data/current"),
+            return_exceptions=True
+        )
 
-        try:
-            df_m_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
-            try:
-                df_f_meteo = pd.read_sql("SELECT timestamp, meteo_temp FROM weather_forecasts WHERE meteo_temp IS NOT NULL ORDER BY timestamp ASC", conn_db)
-            except:
-                df_f_meteo = pd.DataFrame()
+        hist_resp, curr_resp = results
 
-            df_meteo_combined = pd.concat([df_m_meteo, df_f_meteo]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
-            for _, row in df_meteo_combined.iterrows():
-                try:
-                    ts_str = row["timestamp"].replace("Z", "+00:00") if "Z" in row["timestamp"] else row["timestamp"]
-                    if len(ts_str) <= 19:
-                        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                    else:
-                        dt = datetime.fromisoformat(ts_str).replace(tzinfo=None)
-
-                    if start_time <= dt <= end_time:
-                        ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
-                        meteo_points.append([ts_ms, float(row["meteo_temp"])])
-                except: continue
-        except Exception as e:
-            print(f"Meteo DB Error: {e}")
-        finally:
-            conn_db.close()
-
-        try:
-            resp_ext = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext")
-            if resp_ext.status_code == 200:
-                for item in resp_ext.json().get("forecasts", []):
-                    forecast_ext_dict[item["timestamp"]] = item["predicted_ext_temp"]
-        except Exception as e:
-            print(f"ML Ext Forecast unreachable: {e}")
-
-        try:
-            resp_smart = await client.get(f"{ML_ENGINE_URL}/api/forecast/smart?scope=all")
-            if resp_smart.status_code == 200:
-                raw_smart_series = resp_smart.json().get("smart_series", [])
-        except Exception as e:
-            print(f"ML Smart Forecast unreachable: {e}")
-
-        try:
-            resp_analysis = await client.get(f"{ML_ENGINE_URL}/api/forecast/analysis")
-            if resp_analysis.status_code == 200:
-                analysis_data = resp_analysis.json()
-        except Exception as e:
-            print(f"ML Analysis unreachable: {e}")
-
-    def format_series(points_list):
-        series = []
-        for dt, val in sorted(points_list, key=lambda x: x[0]):
-            ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
-            series.append([ts_ms, val])
-        return series
-
-    sim_ext_points = []
-    for ts_str, val in forecast_ext_dict.items():
-        try:
-            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-            if ml == "eval":
-                if start_time <= dt <= now_utc:
-                    sim_ext_points.append((dt, float(val)))
-            else:
-                if dt > now_utc and dt <= end_time:
-                    sim_ext_points.append((dt, float(val)))
-        except: pass
-
-    filtered_smart_series = []
-    for pt in raw_smart_series:
-        ts_ms = pt[0]
-        val = pt[1]
-        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-
-        if ml == "eval":
-            if start_time <= dt <= now_utc:
-                filtered_smart_series.append([ts_ms, float(val)])
+        # Traitement sécurisé History
+        if isinstance(hist_resp, Exception):
+            errors.append(f"History connect error: {hist_resp}")
+        elif hist_resp.status_code == 200:
+            hist_data = hist_resp.json().get("data", [])
         else:
-            if dt > now_utc and dt <= end_time:
-                filtered_smart_series.append([ts_ms, float(val)])
+            errors.append(f"History API failed with {hist_resp.status_code}")
 
-    def get_last_val(key):
-        valid = [v for dt, v in ha_data_dict.get(key, []) if dt <= now_utc]
-        return f"{valid[-1]}°C" if valid else "--°C"
+        # Traitement sécurisé Current
+        if isinstance(curr_resp, Exception):
+            errors.append(f"Current connect error: {curr_resp}")
+        elif curr_resp.status_code == 200:
+            curr_data = curr_resp.json().get("data", {})
+        else:
+            errors.append(f"Current API failed with {curr_resp.status_code}")
+
+    def format_val(val):
+        return f"{val}°C" if val is not None else "--°C"
 
     if mode == "detailed":
         current_values = {
-            "ext": get_last_val("ext_temp"),
-            "cor": get_last_val("cor_temp"),
-            "int": get_last_val("int_temp")
+            "ext": format_val(curr_data.get("ext_temp")),
+            "cor": format_val(curr_data.get("cor_temp")),
+            "int": format_val(curr_data.get("int_temp"))
         }
     else:
         current_values = {
-            "ext": get_last_val("ext_temp"),
+            "ext": format_val(curr_data.get("ext_temp")),
             "cor": "--",
-            "int": get_last_val("int_temp_min")
+            "int": format_val(curr_data.get("int_temp_min"))
         }
+
+    series_dict = {"ext_temp": [], "int_temp_min": [], "int_temp": [], "cor_temp": []}
+
+    for row in hist_data:
+        dt = parse_ts(row.get("timestamp"))
+        if not dt: continue
+        ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+        if row.get("ext_temp") is not None: series_dict["ext_temp"].append([ts_ms, row["ext_temp"]])
+        if row.get("int_temp_min") is not None: series_dict["int_temp_min"].append([ts_ms, row["int_temp_min"]])
+        if row.get("int_temp") is not None: series_dict["int_temp"].append([ts_ms, row["int_temp"]])
+        if row.get("cor_temp") is not None: series_dict["cor_temp"].append([ts_ms, row["cor_temp"]])
+
+    series_data = [{"name": "Extérieur", "data": series_dict["ext_temp"]}]
+    if mode == "detailed":
+        if series_dict["int_temp"]: series_data.append({"name": "Intérieur", "data": series_dict["int_temp"]})
+        if series_dict["cor_temp"]: series_data.append({"name": "Couloir", "data": series_dict["cor_temp"]})
+    else:
+        if series_dict["int_temp_min"]: series_data.append({"name": "Intérieur min", "data": series_dict["int_temp_min"]})
+
+    return {"series": series_data, "current": current_values, "_debug_errors": errors}
+
+
+@app.get("/api-meteo/forecast")
+async def get_forecast(ml: str = "forecast"):
+    ext_data, smart_data, om_data = [], [], []
+    errors = []
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        results = await asyncio.gather(
+            client.get(f"{ML_ENGINE_URL}/api/forecast/ext"),
+            client.get(f"{ML_ENGINE_URL}/api/forecast/smart?scope=all"),
+            client.get(f"{COLLECTOR_URL}/api/data/openmeteo"),
+            return_exceptions=True
+        )
+
+        ext_resp, smart_resp, om_resp = results
+
+        if isinstance(ext_resp, Exception): errors.append(f"ML Ext error: {ext_resp}")
+        elif ext_resp.status_code == 200: ext_data = ext_resp.json().get("forecasts", [])
+        else: errors.append(f"ML Ext error {ext_resp.status_code}")
+
+        if isinstance(smart_resp, Exception): errors.append(f"ML Smart error: {smart_resp}")
+        elif smart_resp.status_code == 200: smart_data = smart_resp.json().get("smart_series", [])
+        else: errors.append(f"ML Smart error {smart_resp.status_code}")
+
+        if isinstance(om_resp, Exception): errors.append(f"OpenMeteo error: {om_resp}")
+        elif om_resp.status_code == 200: om_data = om_resp.json().get("data", [])
+        else: errors.append(f"OpenMeteo error {om_resp.status_code}")
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    sim_ext_points = []
+    for item in ext_data:
+        dt = parse_ts(item.get("timestamp"))
+        if not dt: continue
+        ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        val = float(item["predicted_ext_temp"])
+        if (ml == "eval" and dt <= now_utc) or (ml == "forecast" and dt > now_utc):
+            sim_ext_points.append([ts_ms, val])
+
+    filtered_smart_series = []
+    for ts_ms, val in smart_data:
+        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+        if (ml == "eval" and dt <= now_utc) or (ml == "forecast" and dt > now_utc):
+            filtered_smart_series.append([ts_ms, float(val)])
+
+    om_points = []
+    for row in om_data:
+        dt = parse_ts(row.get("timestamp"))
+        if not dt: continue
+        ts_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        if row.get("meteo_temp") is not None:
+            om_points.append([ts_ms, row["meteo_temp"]])
 
     ext_pred_name = "Extérieur (prévu)" if ml == "forecast" else "Extérieur (ML passé)"
     int_pred_name = "Intérieur (Modèle prévu)" if ml == "forecast" else "Intérieur (Modèle passé)"
 
-    series_data = [
-        {"name": "Extérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["ext_temp"] if dt <= now_utc])},
-        {"name": ext_pred_name, "data": format_series(sim_ext_points)},
-        {"name": int_pred_name, "data": filtered_smart_series},
-        {"name": "Open-Meteo", "data": meteo_points}
-    ]
+    series_data = []
+    if sim_ext_points: series_data.append({"name": ext_pred_name, "data": sim_ext_points})
+    if filtered_smart_series: series_data.append({"name": int_pred_name, "data": filtered_smart_series})
+    if om_points: series_data.append({"name": "Open-Meteo", "data": om_points})
 
-    if mode == "detailed":
-        series_data.append({"name": "Intérieur", "data": format_series([(dt, v) for dt, v in ha_data_dict["int_temp"] if dt <= now_utc])})
-        series_data.append({"name": "Couloir", "data": format_series([(dt, v) for dt, v in ha_data_dict["cor_temp"] if dt <= now_utc])})
-    else:
-        series_data.append({"name": "Intérieur min", "data": format_series([(dt, v) for dt, v in ha_data_dict["int_temp_min"] if dt <= now_utc])})
+    return {"series": series_data, "_debug_errors": errors}
 
-    series_data = [s for s in series_data if len(s["data"]) > 0]
-    data_generated_at = datetime.now(timezone.utc).isoformat()
 
-    # Format the opening time strictly to ISO 8601 UTC for JavaScript
-    inversion_time_raw = analysis_data.get("opening_time")
+@app.get("/api-meteo/analysis")
+async def get_analysis():
+    data = {}
+    errors = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/analysis")
+            if resp.status_code == 200:
+                data = resp.json()
+            else:
+                errors.append(f"Analysis API failed with {resp.status_code}")
+        except Exception as e:
+            errors.append(str(e))
+
     inversion_time_iso = None
-    if inversion_time_raw:
-        inversion_time_iso = str(inversion_time_raw).replace(" ", "T")
+    if data.get("opening_time"):
+        inversion_time_iso = str(data["opening_time"]).replace(" ", "T")
         if not inversion_time_iso.endswith("Z") and "+" not in inversion_time_iso:
             inversion_time_iso += "Z"
 
     return {
-        "series": series_data,
-        "current": current_values,
         "inversion_time": inversion_time_iso,
-        "peak_message": analysis_data.get("peak_message"),
-        "generated_at": data_generated_at
+        "peak_message": data.get("peak_message"),
+        "_debug_errors": errors
     }
-
-
-@app.get("/validation/error", response_class=HTMLResponse)
-async def validation_error_page(request: Request, model: str = "ext"):
-    db_exists = os.path.exists(DB_PATH)
-    chart_payload = {}
-    metrics_summary = {"mean_error": "N/A", "mae": "N/A", "rmse": "N/A"}
-
-    if db_exists:
-        try:
-            df_metrics = pd.DataFrame()
-            async with httpx.AsyncClient() as client:
-                try:
-                    resp_annotated = await client.get(f"{ML_ENGINE_URL}/api/metrics/annotated", timeout=10.0)
-                    if resp_annotated.status_code == 200:
-                        data_list = resp_annotated.json().get("data", [])
-                        df_metrics = pd.DataFrame(data_list)
-                except Exception as e:
-                    print(f"ML Engine Annotated Metrics unreachable, falling back to local DB: {e}")
-
-            if df_metrics.empty:
-                conn = sqlite3.connect(DB_PATH)
-                df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
-                conn.close()
-
-            if not df_metrics.empty:
-                forecast_dict = {}
-                async with httpx.AsyncClient() as client:
-                    if model == "ext":
-                        resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/ext", timeout=5.0)
-                        if resp.status_code == 200:
-                            for item in resp.json().get("forecasts", []):
-                                forecast_dict[item["timestamp"]] = item.get("predicted_ext_temp")
-                        col_name = "ext_temp"
-                    else:
-                        # On interroge l'endpoint séparé pour récupérer STD ou RF selon le choix
-                        resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/int", timeout=10.0)
-                        if resp.status_code == 200:
-                            for item in resp.json().get("forecasts", []):
-                                ts_str = item["timestamp"]
-                                if model == "int_std":
-                                    forecast_dict[ts_str] = item.get("predicted_int_temp_std")
-                                else:
-                                    forecast_dict[ts_str] = item.get("predicted_int_temp_rf")
-                        col_name = "int_temp_min"
-
-                if col_name not in df_metrics.columns:
-                    col_name = "ext" if model == "ext" else "int"
-
-                if col_name in df_metrics.columns:
-                    df_metrics["pred"] = df_metrics["timestamp"].map(forecast_dict)
-                    df_valid = df_metrics.dropna(subset=[col_name, "pred"]).copy()
-
-                    if not df_valid.empty:
-                        if "window_open_flag" in df_valid.columns:
-                            df_valid["window_open"] = df_window_open = df_valid["window_open_flag"]
-                        else:
-                            df_valid["window_open"] = 0
-
-                        df_valid["error"] = df_valid[col_name] - df_valid["pred"]
-                        errors = df_valid["error"]
-
-                        metrics_summary["mean_error"] = round(float(errors.mean()), 2)
-                        metrics_summary["mae"] = round(float(errors.abs().mean()), 2)
-                        metrics_summary["rmse"] = round(float(np.sqrt((errors ** 2).mean())), 2)
-
-                        chart_payload = {
-                            "timestamps": df_valid["timestamp"].tolist(),
-                            "errors": df_valid["error"].round(2).tolist(),
-                            "window_open": df_valid["window_open"].tolist(),
-                            "thermal_mode": df_valid["thermal_mode"].tolist() if "thermal_mode" in df_valid.columns else [],
-                            "model": model
-                        }
-        except Exception as e:
-            print(f"Error generating error validation view: {e}")
-
-    return templates.TemplateResponse(
-        request,
-        "validation_error.html",
-        {
-            "active_page": "validation",
-            "db_exists": db_exists,
-            "current_model": model,
-            "metrics_summary": metrics_summary,
-            "chart_payload": chart_payload
-        }
-    )
 
 
 @app.get("/api/backfill-co2")

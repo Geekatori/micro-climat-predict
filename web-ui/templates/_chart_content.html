@@ -1,34 +1,34 @@
 <div id="cards-container" class="grid gap-1.5 md:gap-4 mb-2">
-    <!-- Généré dynamiquement -->
+    <!-- Dynamically generated -->
 </div>
 
-<!-- Bandeau d'alerte / Inversion -->
+<!-- Alert Banner / Inversion -->
 <div id="alert-banner" class="hidden mb-2 p-2.5 bg-blue-900/40 border border-blue-700/50 rounded-xl text-xs text-blue-200 flex justify-between items-center">
     <span id="alert-message">--</span>
     <span id="opening-time-badge" class="bg-blue-600 px-2 py-0.5 rounded text-white font-semibold shadow">--</span>
 </div>
 
 <div class="bg-gray-800 p-2 md:p-4 rounded-xl border border-gray-700 shadow flex-grow relative flex flex-col min-h-[400px]">
-    <!-- Barre d'outils supérieure -->
+    <!-- Top Toolbar -->
     <div class="flex flex-wrap justify-between items-center mb-3 gap-2 pb-2 border-b border-gray-700/60">
         <div class="text-xs font-semibold text-gray-300">Contrôles du graphique</div>
         <div class="flex flex-wrap items-center gap-3">
 
-            <!-- Switch ML (Passé / Futur) -->
+            <!-- Switch ML (Past / Future) -->
             <label class="relative inline-flex items-center cursor-pointer select-none">
                 <input type="checkbox" id="switch-ml" class="sr-only peer">
                 <div class="w-8 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-600 border border-gray-600"></div>
                 <span class="ml-1.5 text-[11px] text-gray-300">Passé (ML)</span>
             </label>
 
-            <!-- Switch Mode (Simple / Détaillé) -->
+            <!-- Switch Mode (Simple / Detailed) -->
             <label class="relative inline-flex items-center cursor-pointer select-none">
                 <input type="checkbox" id="switch-mode" class="sr-only peer">
                 <div class="w-8 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600 border border-gray-600"></div>
                 <span class="ml-1.5 text-[11px] text-gray-300">Détaillé</span>
             </label>
 
-            <!-- Curseur à 3 positions -->
+            <!-- 3-position Zoom Slider -->
             <div class="flex bg-gray-900/80 p-0.5 rounded-lg border border-gray-700/80 items-center text-[11px] font-medium ml-auto">
                 <button type="button" onclick="setZoomMode('zoom4h')" id="btn-zoom-4h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">±4h</button>
                 <button type="button" onclick="setZoomMode('24h')" id="btn-zoom-24h" class="px-2.5 py-1 rounded-md transition-all duration-200 text-gray-400 hover:text-white">24h</button>
@@ -45,33 +45,145 @@
 </div>
 
 <script>
+    // --- Data Store to handle caching and partial fetching ---
+    class MeteoDataStore {
+        constructor() {
+            this.historySeries = null;
+            this.currentValues = null;
+            this.forecastSeries = null;
+            this.analysisData = null;
+
+            this.loadedHistoryRange = null;
+            this.loadedMode = null;
+            this.loadedMlMode = null;
+        }
+
+        async loadRequiredData(range, mode, mlMode, forceRefresh = false) {
+            const promises = [];
+
+            // 1. History check
+            const needsHistory = forceRefresh || !this.historySeries || this.loadedHistoryRange !== range || this.loadedMode !== mode;
+            if (needsHistory) {
+                promises.push(
+                    fetch(`/api-meteo/history/${range}?mode=${mode}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            this.historySeries = data.series || [];
+                            this.currentValues = data.current || {};
+                            this.loadedHistoryRange = range;
+                            this.loadedMode = mode;
+                        })
+                );
+            }
+
+            // 2. Forecast check
+            const needsForecast = forceRefresh || !this.forecastSeries || this.loadedMlMode !== mlMode;
+            if (needsForecast) {
+                promises.push(
+                    fetch(`/api-meteo/forecast?ml=${mlMode}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            this.forecastSeries = data.series || [];
+                            this.loadedMlMode = mlMode;
+                        })
+                );
+            }
+
+            // 3. Analysis check (quick fetch, always run on refresh or if empty)
+            const needsAnalysis = forceRefresh || !this.analysisData;
+            if (needsAnalysis) {
+                promises.push(
+                    fetch(`/api-meteo/analysis`)
+                        .then(res => res.json())
+                        .then(data => {
+                            this.analysisData = data;
+                        })
+                );
+            }
+
+            if (promises.length > 0) {
+                await Promise.all(promises);
+            }
+
+            return {
+                series: [...(this.historySeries || []), ...(this.forecastSeries || [])],
+                current: this.currentValues,
+                inversion_time: this.analysisData?.inversion_time,
+                peak_message: this.analysisData?.peak_message,
+                generated_at: new Date().toISOString()
+            };
+        }
+    }
+
+    const dataStore = new MeteoDataStore();
+
+    // --- State Initialization ---
     let urlParams = new URLSearchParams(window.location.search);
     let currentZoomMode = urlParams.get('v') === '7d' ? '7d' : (urlParams.get('zoom') === '4h' ? 'zoom4h' : '24h');
     let mode = urlParams.get('mode') === 'detailed' ? 'detailed' : 'simple';
     let mlMode = urlParams.get('ml') === 'eval' ? 'eval' : 'forecast';
-
-    let cachedData = {
-        '24h': null,
-        '7d': null
-    };
+    let chart = null;
 
     document.getElementById('switch-ml').checked = (mlMode === 'eval');
     document.getElementById('switch-mode').checked = (mode === 'detailed');
     updateZoomButtonsUI();
 
+    // --- Event Listeners ---
     document.getElementById('switch-ml').addEventListener('change', (e) => {
         mlMode = e.target.checked ? 'eval' : 'forecast';
-        cachedData = { '24h': null, '7d': null };
         updateUrlState();
-        loadData();
+        loadData(false);
     });
 
     document.getElementById('switch-mode').addEventListener('change', (e) => {
         mode = e.target.checked ? 'detailed' : 'simple';
         updateUrlState();
-        loadData();
+        loadData(false);
     });
 
+    function setZoomMode(targetMode) {
+        if (currentZoomMode === targetMode) return;
+        currentZoomMode = targetMode;
+
+        updateZoomButtonsUI();
+        updateUrlState();
+        loadData(false);
+    }
+
+    // --- Core Data Loading ---
+    async function loadData(forceRefresh = false) {
+        let apiVersion = (currentZoomMode === '7d') ? '7d' : '24h';
+
+        try {
+            // DataStore handles deciding if HTTP calls are needed
+            const data = await dataStore.loadRequiredData(apiVersion, mode, mlMode, forceRefresh);
+
+            // Update Page Title
+            let titleText = `Ext: ${data.current.ext || '--'}`;
+            if (mode === 'detailed') {
+                titleText += ` | Couloir: ${data.current.cor || '--'} | Int: ${data.current.int || '--'}`;
+            } else {
+                titleText += ` | Int: ${data.current.int || '--'}`;
+            }
+            document.title = titleText;
+
+            // Update Freshness Indicator
+            const freshEl = document.getElementById('data-freshness');
+            if (freshEl && data.generated_at) {
+                let d = new Date(data.generated_at);
+                let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                freshEl.innerText = `Mis à jour à ${timeStr}`;
+                freshEl.style.display = 'block';
+            }
+
+            processAndRenderChart(data);
+
+        } catch (err) {
+            console.error("Error loading data:", err);
+        }
+    }
+
+    // --- UI Update Helpers ---
     function updateUrlState() {
         const p = new URLSearchParams(window.location.search);
         p.set('v', currentZoomMode === '7d' ? '7d' : '24h');
@@ -97,8 +209,6 @@
             }
         });
     }
-
-    let chart = null;
 
     function renderCards(current) {
         const container = document.getElementById('cards-container');
@@ -150,7 +260,6 @@
 
         if (!banner) return;
 
-        // Aucun peak_message : on masque complètement le bandeau
         if (!peakMsg) {
             banner.classList.add('hidden');
             return;
@@ -161,11 +270,7 @@
 
         if (inversionTime) {
             const d = new Date(inversionTime);
-            const timeStr = d.toLocaleTimeString('fr-FR', {
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-
+            const timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
             badgeEl.innerText = `Ouvrir à ${timeStr}`;
             badgeEl.style.display = 'inline-block';
         } else {
@@ -173,12 +278,11 @@
         }
     }
 
-
+    // --- Chart Helpers ---
     function getDynamicAnnotations(minTime, maxTime, inversionTime) {
         let annotations = [];
         let now = new Date();
 
-        // Minuit markers
         for (let i = -30; i <= 7; i++) {
             let d = new Date(now);
             d.setDate(d.getDate() + i);
@@ -200,7 +304,6 @@
             }
         }
 
-        // Marqueur d'ouverture
         if (inversionTime) {
             let invDate = new Date(inversionTime);
             let invTimeMs = invDate.getTime();
@@ -220,7 +323,6 @@
                 });
             }
         }
-
         return annotations;
     }
 
@@ -242,70 +344,15 @@
         return null;
     }
 
-    function setZoomMode(targetMode) {
-        if (currentZoomMode === targetMode) return;
-
-        let oldMode = currentZoomMode;
-        currentZoomMode = targetMode;
-        updateZoomButtonsUI();
-        updateUrlState();
-
-        let requiredApiVersion = (targetMode === '7d') ? '7d' : '24h';
-        let oldApiVersion = (oldMode === '7d') ? '7d' : '24h';
-
-        if (requiredApiVersion !== oldApiVersion || !cachedData[requiredApiVersion]) {
-            loadData();
-        } else {
-            processAndRenderChart(cachedData[requiredApiVersion]);
-        }
-    }
-
-    function loadData() {
-        let apiVersion = (currentZoomMode === '7d') ? '7d' : '24h';
-
-        fetch(`/api-meteo/data/${apiVersion}?mode=${mode}&ml=${mlMode}&_t=${Date.now()}`)
-            .then(res => {
-                if (!res.ok) throw new Error("HTTP error: " + res.status);
-                return res.json();
-            })
-            .then(data => {
-                cachedData[apiVersion] = data;
-
-                let titleText = `Ext: ${data.current.ext}`;
-                if (mode === 'detailed') {
-                    titleText += ` | Couloir: ${data.current.cor} | Int: ${data.current.int}`;
-                } else {
-                    titleText += ` | Int: ${data.current.int}`;
-                }
-                document.title = titleText;
-
-                const freshEl = document.getElementById('data-freshness');
-                if (freshEl && data.generated_at) {
-                    let d = new Date(data.generated_at);
-                    let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-                    freshEl.innerText = `Données calculées à ${timeStr}`;
-                    freshEl.style.display = 'block';
-                }
-                processAndRenderChart(data);
-            })
-            .catch(err => console.error("Error loading data:", err));
-    }
-
     function processAndRenderChart(data) {
         renderCards(data.current);
         updateAlertBanner(data.peak_message, data.inversion_time);
 
         let seriesData = data.series || [];
-        let allTimestamps = [];
-        seriesData.forEach(s => {
-            (s.data || []).forEach(pt => allTimestamps.push(pt[0]));
-        });
-
         let now = Date.now();
-        let minTime = allTimestamps.length > 0 ? Math.min(...allTimestamps) : now - (24 * 3600 * 1000);
-        let maxTime = allTimestamps.length > 0 ? Math.max(...allTimestamps) : now + (2 * 3600 * 1000);
+        let minTime, maxTime;
 
-        // Ajustement précis des limites visuelles
+        // Visual limits adjustment based on zoom mode
         if (currentZoomMode === '24h') {
             minTime = now - (24 * 3600 * 1000);
             maxTime = mlMode === 'forecast' ? now + (24 * 3600 * 1000) : now + (2 * 3600 * 1000);
@@ -364,7 +411,8 @@
                     selection: { enabled: false },
                     zoom: { enabled: true, type: 'x', autoScaleYaxis: true, pinch: true },
                     pan: { enabled: true, mode: 'x', speed: 20, inertia: true },
-                    toolbar: { show: true, autoSelected: 'pan' }
+                    toolbar: { show: true, autoSelected: 'pan' },
+                    animations: { enabled: false } // Disabled to speed up zoom transitions
                 },
                 theme: { mode: 'dark' },
                 series: seriesData,
@@ -430,9 +478,12 @@
         }
     }
 
-    loadData();
-    setInterval(loadData, 300000);
+    // Initial load and interval refresh
+    loadData(true);
+    // Force a fresh fetch every 5 minutes (300000 ms)
+    setInterval(() => loadData(true), 300000);
 </script>
+
 <style>
     .custom-tooltip {
         background: #1a1a1a;

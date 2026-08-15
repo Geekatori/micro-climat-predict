@@ -7,6 +7,8 @@ services:
     container_name: data-collector
     volumes:
       - data-volume:/app/data
+    ports:
+      - "8002:8000"
     environment:
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
