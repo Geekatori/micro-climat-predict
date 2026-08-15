@@ -38,12 +38,25 @@ FEATURES_INT = FEATURES_EXT.copy()
 _api_cache = {}
 
 def cached_endpoint(ttl_seconds=300):
-    """Cache API responses to avoid redundant SQLite queries and computations."""
+    """Cache API responses based on database freshness and TTL."""
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Generate a unique key based on function name and parameters
-            cache_key = f"{func.__name__}_{kwargs}"
+            # Récupère le timestamp de la dernière entrée en base pour invalider le cache si les données ont changé
+            db_last_ts = ""
+            try:
+                if os.path.exists(DB_PATH):
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
+                    row = cursor.fetchone()
+                    conn.close()
+                    if row:
+                        db_last_ts = row[0]
+            except:
+                pass
+
+            cache_key = f"{func.__name__}_{kwargs}_{db_last_ts}"
             now = time.time()
 
             if cache_key in _api_cache:
@@ -51,7 +64,6 @@ def cached_endpoint(ttl_seconds=300):
                 if now - entry["timestamp"] < ttl_seconds:
                     return entry["data"]
 
-            # If expired or missing, execute the function
             result = await func(*args, **kwargs)
             _api_cache[cache_key] = {"timestamp": now, "data": result}
             return result
@@ -536,40 +548,36 @@ def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
         "timestamp": iso_timestamp
     }
 
-def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> str:
+def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> datetime | None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     timestamps = pd.to_datetime(df["timestamp"])
     ext_vals = df["ext_temp"].fillna(df["meteo_temp"]).values
 
     n = len(df)
-    # 6 pas de 10 minutes = 1 heure de persistance requise
-    required_consecutive_steps = 6
+    required_consecutive_steps = 6  # 1 heure de persistance (6 x 10 min)
 
     for i in range(n):
         dt = timestamps.iloc[i]
 
-        # On ne regarde que dans le futur
         if dt > now and not np.isnan(preds_std[i]):
-            # Vérifie si la condition est remplie sur les 6 pas suivants
             is_stable_inversion = True
 
             for j in range(required_consecutive_steps):
                 idx = i + j
-                # Si on dépasse la taille du DataFrame ou qu'une valeur est manquante/invalide
                 if idx >= n or np.isnan(preds_std[idx]) or pd.isna(ext_vals[idx]):
                     is_stable_inversion = False
                     break
 
-                # Si à un moment la température extérieure remonte au-dessus du seuil
                 if not (ext_vals[idx] < (preds_std[idx] - 0.5)):
                     is_stable_inversion = False
                     break
 
-            # Si l'inversion est confirmée sur toute la durée, on prend ce point comme référence
             if is_stable_inversion:
-                return str(df["timestamp"].iloc[i])
+                # Retourne directement l'objet natif datetime (converti depuis le Timestamp pandas)
+                return timestamps.iloc[i].to_pydatetime()
 
     return None
+
 
 @app.get("/api/forecast/analysis")
 @cached_endpoint(ttl_seconds=300)
@@ -597,18 +605,9 @@ async def forecast_analysis():
     # get_next_exterior_peak gère déjà tout (fenêtre 24h, exclusion du 1er point, limite 6h)
     peak_info = get_next_exterior_peak(df, model_ext)
 
-    # Find exact opening time when exterior temp < STD temp - 0.5°C in the future
-    opening_time = None
-    timestamps = pd.to_datetime(df["timestamp"])
-
-    for i in range(len(df)):
-        dt = timestamps.iloc[i].replace(tzinfo=None)
-        if dt > now:
-            ext = df.iloc[i]["ext_temp"]
-            std_val = df.iloc[i]["predicted_int_temp_std"]
-            if pd.notna(ext) and pd.notna(std_val) and ext < std_val:
-                opening_time = str(df.iloc[i]["timestamp"])
-                break
+    # Utilisation de notre fonction robuste avec la persistance d'une heure
+    opening_dt = get_optimal_window_opening_time(df, preds_std)
+    opening_time = opening_dt.strftime("%Y-%m-%d %H:%M:%S") if opening_dt else None
 
     peak_msg = None
     if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):
@@ -628,7 +627,6 @@ async def forecast_analysis():
         "opening_time": opening_time,
         "peak_message": peak_msg
     })
-
 
 
 @app.get("/api/forecast/smart")
@@ -663,21 +661,13 @@ async def forecast_smart(scope: str = "all"):
 
     df["predicted_int_temp_rf"] = np.nan
     rf_mask = df[FEATURES_INT].notna().all(axis=1)
-    if not df[rf_mask].empty:
+    if not rf_mask.empty:
         df.loc[rf_mask, "predicted_int_temp_rf"] = model_rf.predict(df[rf_mask][FEATURES_INT])
 
     timestamps = pd.to_datetime(df["timestamp"])
 
-    # 3. Detect opening time (when exterior drops below STD for the first time in the future)
-    opening_dt = None
-    for i in range(len(df)):
-        dt = timestamps.iloc[i].replace(tzinfo=timezone.utc).replace(tzinfo=None)
-        if dt > now:
-            ext = df.iloc[i]["ext_temp"]
-            std_val = df.iloc[i]["predicted_int_temp_std"]
-            if pd.notna(ext) and pd.notna(std_val) and ext < std_val:
-                opening_dt = dt
-                break
+    # 3. Detect opening time using our robust 1-hour persistence function
+    opening_dt = get_optimal_window_opening_time(df, preds_std)
 
     smart_series = []
 
@@ -694,7 +684,7 @@ async def forecast_smart(scope: str = "all"):
             use_rf = (row["window_open_flag"] == 1)
         else:
             # Future: once opening_dt is reached, stay on Random Forest permanently
-            if opening_dt and dt >= opening_dt:
+            if opening_dt and dt > opening_dt:
                 use_rf = True
             else:
                 use_rf = False
@@ -707,6 +697,7 @@ async def forecast_smart(scope: str = "all"):
             smart_series.append([ts_ms, round(float(val), 2)])
 
     return clean_for_json({"smart_series": smart_series})
+
 
 @app.get("/api/forecast/int")
 @cached_endpoint(ttl_seconds=300)
