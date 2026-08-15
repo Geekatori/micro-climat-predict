@@ -477,8 +477,14 @@ async def forecast_ext():
     return {"status": "success", "forecasts": df_features[["timestamp", "predicted_ext_temp"]].to_dict(orient="records")}
 
 def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    future_df = df[pd.to_datetime(df["timestamp"]) > now].copy()
+    # Utilisation d'un timestamp Pandas naïf (sans fuseau) pour 'now'
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+
+    # Conversion propre de la colonne timestamp en datetime naïf
+    df = df.copy()
+    df["_dt"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
+
+    future_df = df[df["_dt"] > now].copy()
     if future_df.empty:
         return {"peak_temp": None, "timestamp": None}
 
@@ -488,9 +494,9 @@ def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
 
     feat_df["predicted_ext"] = model_ext.predict(feat_df[FEATURES_EXT])
 
-    # On restreint la fenêtre aux 6 prochaines heures maximum
-    limit_time = now + timedelta(hours=6)
-    window_df = feat_df[(pd.to_datetime(feat_df["timestamp"]) >= now) & (pd.to_datetime(feat_df["timestamp"]) <= limit_time)]
+    # Fenêtre de 24h gérée en Pandas
+    limit_24h = now + pd.Timedelta(hours=24)
+    window_df = feat_df[(feat_df["_dt"] >= now) & (feat_df["_dt"] <= limit_24h)]
 
     if window_df.empty:
         return {"peak_temp": None, "timestamp": None}
@@ -500,12 +506,22 @@ def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
         return {"peak_temp": None, "timestamp": None}
 
     peak_row = window_df.loc[max_idx]
+    peak_dt = peak_row["_dt"]
+
+    # Soustraction sécurisée via Pandas Timedelta
+    time_diff_hours = (peak_dt - now).total_seconds() / 3600.0
+    if time_diff_hours > 6.0:
+        return {"peak_temp": None, "timestamp": None}
+
+    raw_ts = str(peak_row["timestamp"])
+    iso_timestamp = raw_ts.replace(" ", "T")
+    if not iso_timestamp.endswith("Z"):
+        iso_timestamp += "Z"
 
     return {
         "peak_temp": round(float(peak_row["predicted_ext"]), 2),
-        "timestamp": str(peak_row["timestamp"])
+        "timestamp": iso_timestamp
     }
-
 
 def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> str:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -542,17 +558,8 @@ async def forecast_analysis():
     preds_std = simulate_inertia(df, a, b, c, d, e)
     df["predicted_int_temp_std"] = preds_std
 
+    # get_next_exterior_peak gère déjà tout (fenêtre 24h, exclusion du 1er point, limite 6h)
     peak_info = get_next_exterior_peak(df, model_ext)
-
-    # Filtrer le pic s'il est prévu dans plus de 6 heures
-    if peak_info and peak_info.get("timestamp"):
-        try:
-            peak_dt = datetime.strptime(str(peak_info["timestamp"]), "%Y-%m-%d %H:%M:%S")
-            time_diff_hours = (peak_dt - now).total_seconds() / 3600.0
-            if time_diff_hours > 6.0:
-                peak_info = {"peak_temp": None, "timestamp": None}
-        except Exception:
-            pass
 
     # Find exact opening time when exterior temp < STD temp - 0.5°C in the future
     opening_time = None
@@ -569,7 +576,15 @@ async def forecast_analysis():
 
     peak_msg = None
     if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):
-        time_str = str(peak_info["timestamp"])[11:16]
+        from zoneinfo import ZoneInfo
+
+        # Parse the UTC timestamp and convert it to Europe/Paris local time
+        ts_str = str(peak_info["timestamp"])
+        dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        dt_local = dt_utc.astimezone(ZoneInfo("Europe/Paris"))
+
+        # Format the local time as HH:MM
+        time_str = dt_local.strftime("%H:%M")
         peak_msg = f"Pic extérieur: {peak_info['peak_temp']}°C prévu à {time_str}"
 
     return clean_for_json({
@@ -577,6 +592,7 @@ async def forecast_analysis():
         "opening_time": opening_time,
         "peak_message": peak_msg
     })
+
 
 
 @app.get("/api/forecast/smart")
