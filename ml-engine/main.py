@@ -421,7 +421,7 @@ async def startup_event():
     init_db()
 
 @app.post("/api/train")
-def train_models():  # <-- Retiré 'async' et retiré '@cached_endpoint'
+def train_models():
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     df = load_and_prepare_data()
     df_clean = df.dropna(subset=["ext_temp", "int_temp_min"])
@@ -541,11 +541,34 @@ def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> 
     timestamps = pd.to_datetime(df["timestamp"])
     ext_vals = df["ext_temp"].fillna(df["meteo_temp"]).values
 
-    for i in range(len(df)):
+    n = len(df)
+    # 6 pas de 10 minutes = 1 heure de persistance requise
+    required_consecutive_steps = 6
+
+    for i in range(n):
         dt = timestamps.iloc[i]
+
+        # On ne regarde que dans le futur
         if dt > now and not np.isnan(preds_std[i]):
-            if ext_vals[i] < (preds_std[i] - 0.5):
+            # Vérifie si la condition est remplie sur les 6 pas suivants
+            is_stable_inversion = True
+
+            for j in range(required_consecutive_steps):
+                idx = i + j
+                # Si on dépasse la taille du DataFrame ou qu'une valeur est manquante/invalide
+                if idx >= n or np.isnan(preds_std[idx]) or pd.isna(ext_vals[idx]):
+                    is_stable_inversion = False
+                    break
+
+                # Si à un moment la température extérieure remonte au-dessus du seuil
+                if not (ext_vals[idx] < (preds_std[idx] - 0.5)):
+                    is_stable_inversion = False
+                    break
+
+            # Si l'inversion est confirmée sur toute la durée, on prend ce point comme référence
+            if is_stable_inversion:
                 return str(df["timestamp"].iloc[i])
+
     return None
 
 @app.get("/api/forecast/analysis")
