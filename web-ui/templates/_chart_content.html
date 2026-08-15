@@ -217,7 +217,7 @@
         }
         document.title = titleText;
 
-        const freshEl = document.getElementById('data-freshness');
+        const freshEl = document.getElementById('fetch-time');
         if (freshEl && data.generated_at) {
             let d = new Date(data.generated_at);
             let timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
