@@ -391,8 +391,19 @@ def scipy_fine_tuning(df: pd.DataFrame, initial_params: dict):
     }
     return refined_params, float(result.fun)
 
+def remove_constant_blocks(df: pd.DataFrame, cols=["ext_temp", "int_temp_min"], window=24) -> pd.DataFrame:
+    """Detect and drop flat temperature blocks lasting 4 hours or more (24 steps of 10 min)."""
+    df = df.copy()
+    for col in cols:
+        if col in df.columns:
+            roll_min = df[col].rolling(window=window, min_periods=window).min()
+            roll_max = df[col].rolling(window=window, min_periods=window).max()
+            is_constant = (roll_max == roll_min)
+            df.loc[is_constant, col] = np.nan
+    return df
+
 def load_and_prepare_data() -> pd.DataFrame:
-    """Helper unifié pour charger, fusionner et interpoler les données à 10 min."""
+    """Unified helper to load, merge, resample, and clean metric data."""
     if not os.path.exists(DB_PATH):
         raise HTTPException(status_code=404, detail="Database not found.")
 
@@ -407,23 +418,23 @@ def load_and_prepare_data() -> pd.DataFrame:
     if df_m.empty:
         raise HTTPException(status_code=400, detail="Database is empty.")
 
-    # 1. Concaténation et conversion en index temporel
     df = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.set_index("timestamp")
 
-    # 2. RE-ECHELONNAGE GLOBAL : Force un pas strict de 10 minutes et interpole linéairement
-    # C'est cela qui va lisser et combler le vide entre le dernier point réel et le forecast !
+    # Resample to strict 10-minute intervals with linear interpolation
     df = df.resample("10min").mean().interpolate(method="linear").reset_index()
 
-    # 3. Application des features solaires, comportementales et multiscales sur la grille continue
+    # Clean out flat/constant blocks lasting >= 4 hours (24 * 10 min = 240 min)
+    df = remove_constant_blocks(df, cols=["ext_temp", "int_temp_min"], window=24)
+
+    # Feature engineering
     df = add_solar_features(df)
     df = add_behavioral_features(df)
     df = add_multiscale_features(df)
 
     df["ext_temp"] = df["ext_temp"].fillna(df["meteo_temp"])
 
-    # Remet le timestamp au format string pour le reste du pipeline
     df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
     return df
 
