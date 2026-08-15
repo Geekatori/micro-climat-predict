@@ -408,8 +408,7 @@ async def startup_event():
     init_db()
 
 @app.post("/api/train")
-@cached_endpoint(ttl_seconds=300)
-async def train_models():
+def train_models():  # <-- Retiré 'async' et retiré '@cached_endpoint'
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     df = load_and_prepare_data()
     df_clean = df.dropna(subset=["ext_temp", "int_temp_min"])
@@ -437,9 +436,7 @@ async def train_models():
 
     # 3. Optimize Interior Model (Grid Search + SciPy)
     grid_params_std, rmse_std = optimize_thermal_inertia(df_clean)
-    print(grid_params_std, rmse_std)
     best_params_std, rmse_std = scipy_fine_tuning(df_clean, grid_params_std)
-    print(best_params_std, rmse_std)
     joblib.dump(best_params_std, MODEL_INT_STD_PATH)
 
     conn = sqlite3.connect(DB_PATH)
@@ -449,6 +446,10 @@ async def train_models():
     """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_rf, "success", f"RF Models + STD trained. STD params: {best_params_std}"))
     conn.commit()
     conn.close()
+
+    # CRical: Clear the API cache so future predictions use the newly trained models!
+    _api_cache.clear()
+    print(f"[{datetime.now()}] Models retrained successfully. API cache cleared.")
 
     return {
         "status": "success",

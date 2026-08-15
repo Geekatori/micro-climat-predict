@@ -5,7 +5,7 @@ import sqlite3
 import httpx
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import asyncio
@@ -220,13 +220,23 @@ async def trigger_collect(days: int = 10):
         print(f"Failed to trigger collection: {e}")
     return RedirectResponse(url="/admin", status_code=303)
 
-@app.get("/trigger-train")
-async def trigger_train():
+
+async def background_train_request():
+    """Tâche exécutée en arrière-plan pour ne pas bloquer l'utilisateur."""
     try:
         async with httpx.AsyncClient() as client:
-            await client.post(f"{ML_ENGINE_URL}/api/train", timeout=60.0)
+            # On met un timeout large car l'entraînement est long
+            await client.post(f"{ML_ENGINE_URL}/api/train", timeout=120.0)
+            print("Background training completed successfully.")
     except Exception as e:
-        print(f"Failed to trigger training: {e}")
+        print(f"Failed to trigger background training: {e}")
+
+@app.get("/trigger-train")
+async def trigger_train(background_tasks: BackgroundTasks):
+    # Ajoute la tâche à la file d'attente d'arrière-plan de FastAPI
+    background_tasks.add_task(background_train_request)
+
+    # Redirige l'utilisateur INSTANTANÉMENT, sans attendre la fin du calcul
     return RedirectResponse(url="/admin", status_code=303)
 
 @app.get("/trigger-clear")
