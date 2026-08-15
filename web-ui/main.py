@@ -212,7 +212,7 @@ async def admin_dashboard(request: Request):
     )
 
 @app.get("/trigger-collect")
-async def trigger_collect(days: int = 10):
+async def trigger_collect(days: int = 9):
     try:
         async with httpx.AsyncClient() as client:
             await client.get(f"{COLLECTOR_URL}/api/collect?days={days}", timeout=60.0)
