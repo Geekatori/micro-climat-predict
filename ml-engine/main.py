@@ -380,7 +380,7 @@ def scipy_fine_tuning(df: pd.DataFrame, initial_params: dict):
     return refined_params, float(result.fun)
 
 def load_and_prepare_data() -> pd.DataFrame:
-    """Helper unifié pour charger et préparer les données métriques et prévisions."""
+    """Helper unifié pour charger, fusionner et interpoler les données à 10 min."""
     if not os.path.exists(DB_PATH):
         raise HTTPException(status_code=404, detail="Database not found.")
 
@@ -395,11 +395,24 @@ def load_and_prepare_data() -> pd.DataFrame:
     if df_m.empty:
         raise HTTPException(status_code=400, detail="Database is empty.")
 
+    # 1. Concaténation et conversion en index temporel
     df = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.set_index("timestamp")
+
+    # 2. RE-ECHELONNAGE GLOBAL : Force un pas strict de 10 minutes et interpole linéairement
+    # C'est cela qui va lisser et combler le vide entre le dernier point réel et le forecast !
+    df = df.resample("10min").mean().interpolate(method="linear").reset_index()
+
+    # 3. Application des features solaires, comportementales et multiscales sur la grille continue
     df = add_solar_features(df)
     df = add_behavioral_features(df)
     df = add_multiscale_features(df)
+
     df["ext_temp"] = df["ext_temp"].fillna(df["meteo_temp"])
+
+    # Remet le timestamp au format string pour le reste du pipeline
+    df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
     return df
 
 @app.on_event("startup")

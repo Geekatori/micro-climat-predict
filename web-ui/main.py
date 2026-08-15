@@ -320,7 +320,6 @@ async def get_history(version: str, mode: str = "simple"):
     errors = []
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # return_exceptions=True empêche un échec de faire crasher les autres
         results = await asyncio.gather(
             client.get(f"{COLLECTOR_URL}/api/data/history/{version}"),
             client.get(f"{COLLECTOR_URL}/api/data/current"),
@@ -329,7 +328,6 @@ async def get_history(version: str, mode: str = "simple"):
 
         hist_resp, curr_resp = results
 
-        # Traitement sécurisé History
         if isinstance(hist_resp, Exception):
             errors.append(f"History connect error: {hist_resp}")
         elif hist_resp.status_code == 200:
@@ -337,7 +335,6 @@ async def get_history(version: str, mode: str = "simple"):
         else:
             errors.append(f"History API failed with {hist_resp.status_code}")
 
-        # Traitement sécurisé Current
         if isinstance(curr_resp, Exception):
             errors.append(f"Current connect error: {curr_resp}")
         elif curr_resp.status_code == 200:
@@ -372,6 +369,24 @@ async def get_history(version: str, mode: str = "simple"):
         if row.get("int_temp_min") is not None: series_dict["int_temp_min"].append([ts_ms, row["int_temp_min"]])
         if row.get("int_temp") is not None: series_dict["int_temp"].append([ts_ms, row["int_temp"]])
         if row.get("cor_temp") is not None: series_dict["cor_temp"].append([ts_ms, row["cor_temp"]])
+
+    # --- INJECTION DU POINT "LIVE" (HA / CURRENT) ---
+    # Si on a des données courantes fraîches, on les ajoute comme point final "now"
+    if curr_data:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        # On évite d'ajouter un point en double si le dernier historique est déjà très proche (< 2 min)
+        def safe_append(key, val_key):
+            val = curr_data.get(val_key)
+            if val is not None:
+                if not series_dict[key] or (now_ms - series_dict[key][-1][0] > 120000):
+                    series_dict[key].append([now_ms, val])
+
+        safe_append("ext_temp", "ext_temp")
+        safe_append("int_temp_min", "int_temp_min")
+        safe_append("int_temp", "int_temp")
+        safe_append("cor_temp", "cor_temp")
+    # -----------------------------------------------
 
     series_data = [{"name": "Extérieur", "data": series_dict["ext_temp"]}]
     if mode == "detailed":
