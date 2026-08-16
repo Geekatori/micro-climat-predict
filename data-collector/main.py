@@ -435,3 +435,109 @@ def get_last_collection():
         return {"status": "success", "last_collection": last_ts}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.get("/api/data/admin-stats")
+async def get_admin_stats():
+    """
+    Calcule et renvoie toutes les statistiques de la base de données
+    et les 50 dernières lignes pour le tableau de bord Admin (avec cache).
+    """
+    cache_key = "admin_stats"
+    if cache_key in _db_cache:
+        return _db_cache[cache_key]
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
+        conn.close()
+
+        if df.empty:
+            return {"status": "empty"}
+
+        total_rows = len(df)
+        start_date = df.iloc[0]["timestamp"]
+        end_date = df.iloc[-1]["timestamp"]
+
+        # Calcul de la fréquence d'échantillonnage
+        dt1 = pd.to_datetime(df.iloc[0]["timestamp"])
+        dt2 = pd.to_datetime(df.iloc[1]["timestamp"]) if len(df) > 1 else dt1
+        diff_seconds = int((dt2 - dt1).total_seconds())
+        sampling_freq = f"{diff_seconds // 60} minutes" if diff_seconds >= 60 else f"{diff_seconds} secondes"
+
+        # Statistiques par colonne et valeurs manquantes
+        stats_columns = {}
+        missing_counts = df.isnull().sum().to_dict()
+        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+
+        for col in numeric_cols:
+            stats_columns[col] = {
+                "min": round(df[col].min(), 2) if not pd.isna(df[col].min()) else "N/A",
+                "max": round(df[col].max(), 2) if not pd.isna(df[col].max()) else "N/A",
+                "mean": round(df[col].mean(), 2) if not pd.isna(df[col].mean()) else "N/A"
+            }
+
+        # Les 50 dernières lignes pour le tableau HTML
+        tail_50 = df.tail(50).sort_values(by="timestamp", ascending=False)
+        tail_50 = tail_50.where(pd.notnull(tail_50), None)
+
+        result = {
+            "status": "success",
+            "total_rows": total_rows,
+            "start_date": start_date,
+            "end_date": end_date,
+            "sampling_freq": sampling_freq,
+            "stats_columns": stats_columns,
+            "missing_counts": missing_counts,
+            "records": tail_50.to_dict(orient="records"),
+            "columns": list(df.columns)
+        }
+
+        _db_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/data/admin-chart")
+async def get_admin_chart(days: int = 7):
+    """
+    Renvoie toutes les métriques passées (avec exogènes) et les prévisions météo futures (avec cache).
+    """
+    cache_key = f"admin_chart_{days}"
+    if cache_key in _db_cache:
+        return _db_cache[cache_key]
+
+    start_time = datetime.now(timezone.utc) - timedelta(days=days)
+    start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        df_metrics = pd.read_sql(
+            "SELECT * FROM metrics WHERE timestamp >= ? ORDER BY timestamp ASC",
+            conn,
+            params=(start_str_db,)
+        )
+        df_forecasts = pd.read_sql("SELECT * FROM weather_forecasts ORDER BY timestamp ASC", conn)
+        conn.close()
+
+        # Nettoyage des NaN pour le JSON
+        df_metrics = df_metrics.where(pd.notnull(df_metrics), None)
+        df_forecasts = df_forecasts.where(pd.notnull(df_forecasts), None)
+
+        result = {
+            "status": "success",
+            "metrics": df_metrics.to_dict(orient="records"),
+            "forecasts": df_forecasts.to_dict(orient="records")
+        }
+
+        _db_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/clear-cache")
+async def api_clear_cache():
+    """Clear the collector in-memory cache."""
+    clear_db_cache()
+    return {"status": "success", "message": "Collector cache cleared successfully."}

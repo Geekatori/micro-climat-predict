@@ -7,7 +7,7 @@ import math
 from fastapi import FastAPI, HTTPException, Query
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
 from astral import LocationInfo
@@ -26,49 +26,49 @@ MODEL_INT_STD_PATH = "/app/data/model_int_std.joblib"
 LAT = float(os.getenv("LAT", 45.7797))
 LON = float(os.getenv("LON", 3.0863))
 
-FEATURES_EXT = [
+FEATURES_BASE = [
     "meteo_temp", "meteo_hum", "wind_speed", "sun_elevation", "sun_azimuth",
     "meteo_temp_lag1", "meteo_temp_lag6", "meteo_temp_lag12", "meteo_temp_lag72", "meteo_temp_lag144",
     "sun_elevation_lag1", "sun_elevation_lag6", "sun_elevation_lag12"
 ]
 
-FEATURES_INT = FEATURES_EXT.copy()
+FEATURES_EXT = FEATURES_BASE + ["ext_temp_lag1"]
+FEATURES_INT = FEATURES_BASE + ["int_temp_lag1"]
 
-# In-memory dictionary for API response caching
-_api_cache = {}
+def add_autoregressive_lags(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.sort_values("timestamp").copy()
 
-def cached_endpoint(ttl_seconds=300):
-    """Cache API responses based on database freshness and TTL."""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Récupère le timestamp de la dernière entrée en base pour invalider le cache si les données ont changé
-            db_last_ts = ""
-            try:
-                if os.path.exists(DB_PATH):
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
-                    row = cursor.fetchone()
-                    conn.close()
-                    if row:
-                        db_last_ts = row[0]
-            except:
-                pass
+    if "ext_temp" in df.columns:
+        df["ext_temp_lag1"] = df["ext_temp"].shift(1)
 
-            cache_key = f"{func.__name__}_{kwargs}_{db_last_ts}"
-            now = time.time()
+    if "int_temp_min" in df.columns:
+        df["int_temp_lag1"] = df["int_temp_min"].shift(1)
 
-            if cache_key in _api_cache:
-                entry = _api_cache[cache_key]
-                if now - entry["timestamp"] < ttl_seconds:
-                    return entry["data"]
+    return df
 
-            result = await func(*args, **kwargs)
-            _api_cache[cache_key] = {"timestamp": now, "data": result}
-            return result
-        return wrapper
-    return decorator
+# Global in-memory cache for computed simulation to avoid redundant heavy loops
+_simulation_cache = {"timestamp": None, "df": None}
+_smart_json_cache = {"timestamp": None, "json": None}
+
+def get_db_last_timestamp() -> str:
+    try:
+        if os.path.exists(DB_PATH):
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return row[0]
+    except:
+        pass
+    return ""
+
+def clear_caches():
+    _simulation_cache["timestamp"] = None
+    _simulation_cache["df"] = None
+    _smart_json_cache["timestamp"] = None
+    _smart_json_cache["json"] = None
 
 def clean_for_json(data):
     """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
@@ -175,7 +175,6 @@ def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e
         return T_est
 
     raw_ext = df["ext_temp"].fillna(df["meteo_temp"]).values
-    # Lissage de la température extérieure sur 3 heures (18 pas de 10 min) pour absorber le déphasage des murs
     ext_temps = pd.Series(raw_ext).rolling(window=18, min_periods=1).mean().values
 
     rad_vals = df["direct_radiation"].fillna(0.0).values if "direct_radiation" in df.columns else np.zeros(n)
@@ -218,7 +217,7 @@ def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e
 
     for i in range(start_idx, n):
         dt = timestamps.iloc[i]
-        ext = ext_temps[i]  # Utilise la température extérieure lissée (inertie des murs)
+        ext = ext_temps[i]
         solar_thermal_input = solar_inertia_smooth[i]
         wind = max(0.0, wind_vals[i])
 
@@ -263,147 +262,112 @@ def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e
 
     return T_est
 
-def optimize_thermal_inertia(df: pd.DataFrame):
-    # Centered 'a' around the new found minimum, and expanded 'e' upwards
-    # temperature exérieure (couplée au vent)
-    a_grid = [0.000008, 0.000012, 0.000016]
-    # radiation directe
-    b_grid = [0.02, 0.03, 0.045]
-    # cave
-    c_grid = [0.009, 0.011, 0.013]
-    # effet CO2 (activité)
-    d_grid = [0.00007, 0.0001, 0.00015]
-    # élévation du soleil
-    e_grid = [0.032, 0.038, 0.045]
-
-    best_params = {"a": 0.000012, "b": 0.03, "c": 0.011, "d": 0.0001, "e": 0.035}
-    best_score = float("inf")
-
-    df_eval = df.dropna(subset=["ext_temp", "int_temp_min", "window_open_flag"]).copy()
-    eval_mask = (df_eval["window_open_flag"] == 0).values
-    actuals = df_eval["int_temp_min"].values
-
-    for a in a_grid:
-        for b in b_grid:
-            for c in c_grid:
-                for d in d_grid:
-                    for e in e_grid:
-                        preds = simulate_inertia(df_eval, a, b, c, d, e)
-                        valid_mask = eval_mask & ~np.isnan(actuals)
-                        if not np.any(valid_mask): continue
-
-                        diff = actuals[valid_mask] - preds[valid_mask]
-                        normal_error_mask = np.abs(diff) < 2.5
-                        if not np.any(normal_error_mask): continue
-
-                        filtered_diff = diff[normal_error_mask]
-                        score = np.percentile(np.abs(filtered_diff), 90) + np.abs(np.mean(filtered_diff))
-
-                        if score < best_score:
-                            best_score = score
-                            best_params = {"a": a, "b": b, "c": c, "d": d, "e": e}
-
-    return best_params, best_score
-
-def scipy_fine_tuning(df: pd.DataFrame, initial_params: dict):
-    df_eval = df.dropna(subset=["ext_temp", "int_temp_min", "window_open_flag"]).copy()
-    eval_mask = (df_eval["window_open_flag"] == 0).values
-    actuals = df_eval["int_temp_min"].values
-
-    def objective(x):
-        a, b, c, d, e = x[0], x[1], x[2], x[3], x[4]
-        if a < 0 or b < 0 or d < 0 or e < 0:
-            return 1e6
-
-        preds = simulate_inertia(df_eval, a, b, c, d, e)
-        valid_mask = eval_mask & ~np.isnan(actuals)
-        if not np.any(valid_mask):
-            return 1e6
-
-        diff = actuals[valid_mask] - preds[valid_mask]
-        normal_error_mask = np.abs(diff) < 2.5
-        if not np.any(normal_error_mask):
-            return 1e6
-
-        filtered_diff = diff[normal_error_mask]
-        return float(np.percentile(np.abs(filtered_diff), 90) + (1.0 * np.abs(np.mean(filtered_diff))))
-
-    # On part des meilleurs paramètres trouvés par le Grid Search
-    initial_guess = [
-        initial_params["a"],
-        initial_params["b"],
-        initial_params["c"],
-        initial_params["d"],
-        initial_params["e"]
-    ]
-
-    # On augmente un peu les itérations pour laisser Nelder-Mead converger finement
-    result = minimize(objective, initial_guess, method="Nelder-Mead", options={"maxiter": 200, "xatol": 1e-6})
-
-    refined_params = {
-        "a": float(result.x[0]),
-        "b": float(result.x[1]),
-        "c": float(result.x[2]),
-        "d": float(result.x[3]),
-        "e": float(result.x[4])
-    }
-    return refined_params, float(result.fun)
-
-def scipy_fine_tuning(df: pd.DataFrame, initial_params: dict):
-    df_eval = df.dropna(subset=["ext_temp", "int_temp_min", "window_open_flag"]).copy()
-    eval_mask = (df_eval["window_open_flag"] == 0).values
-    actuals = df_eval["int_temp_min"].values
-
-    def objective(x):
-        a, b, c, d, e = x[0], x[1], x[2], x[3], x[4]
-        if a < 0 or b < 0 or d < 0 or e < 0:
-            return 1e6
-
-        preds = simulate_inertia(df_eval, a, b, c, d, e)
-        valid_mask = eval_mask & ~np.isnan(actuals)
-        if not np.any(valid_mask):
-            return 1e6
-
-        diff = actuals[valid_mask] - preds[valid_mask]
-        normal_error_mask = np.abs(diff) < 2.5
-        if not np.any(normal_error_mask):
-            return 1e6
-
-        filtered_diff = diff[normal_error_mask]
-        return float(np.percentile(np.abs(filtered_diff), 90) + (1.0 * np.abs(np.mean(filtered_diff))))
-
-    initial_guess = [
-        initial_params["a"],
-        initial_params["b"],
-        initial_params["c"],
-        initial_params["d"],
-        initial_params.get("e", 0.0001)
-    ]
-
-    result = minimize(objective, initial_guess, method="Nelder-Mead", options={"maxiter": 100, "xatol": 1e-5})
-
-    refined_params = {
-        "a": float(result.x[0]),
-        "b": float(result.x[1]),
-        "c": float(result.x[2]),
-        "d": float(result.x[3]),
-        "e": float(result.x[4])
-    }
-    return refined_params, float(result.fun)
-
-def remove_constant_blocks(df: pd.DataFrame, cols=["ext_temp", "int_temp_min"], window=24) -> pd.DataFrame:
-    """Detect and drop flat temperature blocks lasting 4 hours or more (24 steps of 10 min)."""
+def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFrame:
     df = df.copy()
-    for col in cols:
-        if col in df.columns:
-            roll_min = df[col].rolling(window=window, min_periods=window).min()
-            roll_max = df[col].rolling(window=window, min_periods=window).max()
-            is_constant = (roll_max == roll_min)
-            df.loc[is_constant, col] = np.nan
+    df["predicted_ext_temp"] = np.nan
+    df["predicted_int_temp_rf"] = np.nan
+
+    timestamps = pd.to_datetime(df["timestamp"])
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    past_mask = timestamps <= now
+    future_mask = timestamps > now
+
+    # 1. PASSÉ : Vectorisé en bloc (instantané, pas de boucle lente)
+    if not df[past_mask].empty:
+        ext_past_feat = df.loc[past_mask, FEATURES_EXT]
+        if not ext_past_feat.isna().any(axis=1).all():
+            delta_ext_past = model_ext.predict(ext_past_feat)
+            df.loc[past_mask, "predicted_ext_temp"] = df.loc[past_mask, "meteo_temp"] + delta_ext_past
+
+        if model_int is not None:
+            int_past_feat = df.loc[past_mask, FEATURES_INT]
+            df.loc[past_mask, "predicted_int_temp_rf"] = model_int.predict(int_past_feat)
+
+    # 2. FUTUR : Boucle récursive uniquement sur la partie future
+    future_indices = df[future_mask].index
+    if len(future_indices) > 0:
+        # Récupération du dernier point réel connu pour amorcer la récurrence
+        last_ext = df.loc[past_mask, "ext_temp"].dropna().iloc[-1] if not df.loc[past_mask, "ext_temp"].dropna().empty else 20.0
+        last_int = df.loc[past_mask, "int_temp_min"].dropna().iloc[-1] if not df.loc[past_mask, "int_temp_min"].dropna().empty else 20.0
+
+        current_ext_lag = last_ext
+        current_int_lag = last_int
+
+        for idx in future_indices:
+            # Injection des lags courants
+            df.loc[idx, "ext_temp_lag1"] = current_ext_lag
+            if model_int is not None:
+                df.loc[idx, "int_temp_lag1"] = current_int_lag
+
+            # Prédiction Extérieur
+            row_ext = df.loc[[idx], FEATURES_EXT]
+            try:
+                delta_ext = model_ext.predict(row_ext)[0]
+                pred_ext = df.loc[idx, "meteo_temp"] + delta_ext
+            except:
+                pred_ext = current_ext_lag
+
+            df.loc[idx, "predicted_ext_temp"] = pred_ext
+            df.loc[idx, "ext_temp"] = pred_ext  # Nécessaire pour le modèle physique STD en aval
+            current_ext_lag = pred_ext
+
+            # Prédiction Intérieur (RF)
+            if model_int is not None:
+                row_int = df.loc[[idx], FEATURES_INT]
+                try:
+                    pred_int = model_int.predict(row_int)[0]
+                except:
+                    pred_int = current_int_lag
+
+                df.loc[idx, "predicted_int_temp_rf"] = pred_int
+                current_int_lag = pred_int
+
     return df
 
+def run_ml_simulation_from(
+    df: pd.DataFrame,
+    model_int,
+    start_ts: datetime,
+    end_ts: datetime,
+    init_int_temp: float
+) -> dict:
+    # 1. On isole uniquement la tranche utile (pas de copie du passé entier)
+    timestamps = pd.to_datetime(df["timestamp"])
+    mask = (timestamps >= start_ts) & (timestamps <= end_ts)
+    sub_df = df.loc[mask].copy()
+
+    if sub_df.empty:
+        return {}
+
+    # 2. Initialisation du premier lag avec la valeur fournie
+    current_int_lag = init_int_temp
+    predictions = {}
+
+    # 3. Boucle uniquement sur le sous-ensemble léger
+    for idx, row in sub_df.iterrows():
+        # Inject the current autoregressive lag
+        sub_df.loc[idx, "int_temp_lag1"] = current_int_lag
+
+        # Interior prediction (RF) with continuity
+        row_int = sub_df.loc[[idx], FEATURES_INT]
+
+        try:
+            pred_int = model_int.predict(row_int)[0]
+        except Exception as e:
+            print(f"Prediction error at {row['timestamp']}: {e}")
+            pred_int = current_int_lag
+
+        sub_df.loc[idx, "predicted_int_temp_rf"] = pred_int
+        current_int_lag = pred_int
+
+        # Store result
+        ts_str = str(row["timestamp"])
+        predictions[ts_str] = float(pred_int)
+
+    return predictions
+
 def load_and_prepare_data() -> pd.DataFrame:
-    """Unified helper to load, merge, resample, and clean metric data."""
     if not os.path.exists(DB_PATH):
         raise HTTPException(status_code=404, detail="Database not found.")
 
@@ -422,24 +386,55 @@ def load_and_prepare_data() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.set_index("timestamp")
 
-    # Resample to strict 10-minute intervals with linear interpolation
     df = df.resample("10min").mean().interpolate(method="linear").reset_index()
 
-    # Clean out flat/constant blocks lasting >= 4 hours (24 * 10 min = 240 min)
+    def remove_constant_blocks(dframe, cols=["ext_temp", "int_temp_min"], window=24):
+        dframe = dframe.copy()
+        for col in cols:
+            if col in dframe.columns:
+                roll_min = dframe[col].rolling(window=window, min_periods=window).min()
+                roll_max = dframe[col].rolling(window=window, min_periods=window).max()
+                is_constant = (roll_max == roll_min)
+                dframe.loc[is_constant, col] = np.nan
+        return dframe
+
     df = remove_constant_blocks(df, cols=["ext_temp", "int_temp_min"], window=24)
 
-    # Feature engineering
     df = add_solar_features(df)
     df = add_behavioral_features(df)
     df = add_multiscale_features(df)
+    df = add_autoregressive_lags(df)
 
     df["ext_temp"] = df["ext_temp"].fillna(df["meteo_temp"])
-
     df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
     return df
 
+def get_cached_simulation_df() -> pd.DataFrame:
+    """Computes and caches the full dataset simulations once per database state."""
+    current_ts = get_db_last_timestamp()
+
+    if _simulation_cache["df"] is not None and _simulation_cache["timestamp"] == current_ts:
+        return _simulation_cache["df"]
+
+    df = load_and_prepare_data()
+
+    model_ext = joblib.load(MODEL_EXT_PATH) if os.path.exists(MODEL_EXT_PATH) else None
+    model_int = joblib.load(MODEL_INT_RF_PATH) if os.path.exists(MODEL_INT_RF_PATH) else None
+
+    if model_ext is not None:
+        df = run_ml_simulation(df, model_ext=model_ext, model_int=model_int)
+
+    if os.path.exists(MODEL_INT_STD_PATH):
+        params_std = joblib.load(MODEL_INT_STD_PATH)
+        a, b, c, d, e = params_std["a"], params_std["b"], params_std["c"], params_std["d"], params_std.get("e", 0.0)
+        preds_std = simulate_inertia(df, a, b, c, d, e)
+        df["predicted_int_temp_std"] = preds_std
+
+    _simulation_cache["timestamp"] = current_ts
+    _simulation_cache["df"] = df
+    return df
+
 @app.on_event("startup")
-@cached_endpoint(ttl_seconds=300)
 async def startup_event():
     init_db()
 
@@ -452,40 +447,98 @@ def train_models():
     if df_clean.empty:
         raise HTTPException(status_code=400, detail="Not enough valid data after cleaning.")
 
-    # 1. Train Exterior Model (RF)
     X_ext = df_clean[FEATURES_EXT]
-    y_ext = df_clean["ext_temp"]
-    X_tr_ext, X_te_ext, y_tr_ext, y_te_ext = train_test_split(X_ext, y_ext, test_size=0.2, random_state=42)
-    model_ext = RandomForestRegressor(n_estimators=100, random_state=42)
-    model_ext.fit(X_tr_ext, y_tr_ext)
-    rmse_ext = float(np.sqrt(mean_squared_error(y_te_ext, model_ext.predict(X_te_ext))))
-    joblib.dump(model_ext, MODEL_EXT_PATH)
+    y_ext_delta = df_clean["ext_temp"] - df_clean["meteo_temp"]
 
-    # 2. Train Interior Model (RF - Generalist)
+    X_tr_ext, X_te_ext, y_tr_ext_delta, y_te_ext_delta = train_test_split(
+        X_ext, y_ext_delta, test_size=0.2, random_state=42, shuffle=False
+    )
+
+    model_ext_ml = HistGradientBoostingRegressor(
+        max_iter=100, learning_rate=0.05, max_depth=5, random_state=42
+    )
+    model_ext_ml.fit(X_tr_ext, y_tr_ext_delta)
+
+    delta_preds_te = model_ext_ml.predict(X_te_ext)
+    reconstructed_preds = X_te_ext["meteo_temp"] + delta_preds_te
+    actual_temps = X_te_ext["meteo_temp"] + y_te_ext_delta
+    rmse_ext = float(np.sqrt(mean_squared_error(actual_temps, reconstructed_preds)))
+    joblib.dump(model_ext_ml, MODEL_EXT_PATH)
+
     X_int = df_clean[FEATURES_INT]
     y_int = df_clean["int_temp_min"]
-    X_tr_int, X_te_int, y_tr_int, y_te_int = train_test_split(X_int, y_int, test_size=0.2, random_state=42)
-    model_int_rf = RandomForestRegressor(n_estimators=100, random_state=42)
-    model_int_rf.fit(X_tr_int, y_tr_int)
-    rmse_int_rf = float(np.sqrt(mean_squared_error(y_te_int, model_int_rf.predict(X_te_int))))
-    joblib.dump(model_int_rf, MODEL_INT_RF_PATH)
+    X_tr_int, X_te_int, y_tr_int, y_te_int = train_test_split(
+        X_int, y_int, test_size=0.2, random_state=42, shuffle=False
+    )
 
-    # 3. Optimize Interior Model (Grid Search + SciPy)
-    grid_params_std, rmse_std = optimize_thermal_inertia(df_clean)
-    best_params_std, rmse_std = scipy_fine_tuning(df_clean, grid_params_std)
+    model_int_ml = HistGradientBoostingRegressor(
+        max_iter=150, learning_rate=0.05, max_depth=7, random_state=42
+    )
+    model_int_ml.fit(X_tr_int, y_tr_int)
+    rmse_int_rf = float(np.sqrt(mean_squared_error(y_te_int, model_int_ml.predict(X_te_int))))
+    joblib.dump(model_int_ml, MODEL_INT_RF_PATH)
+
+    # Grid search optimization for STD model
+    a_grid = [0.000008, 0.000012, 0.000016]
+    b_grid = [0.02, 0.03, 0.045]
+    c_grid = [0.009, 0.011, 0.013]
+    d_grid = [0.00007, 0.0001, 0.00015]
+    e_grid = [0.032, 0.038, 0.045]
+
+    best_params = {"a": 0.000012, "b": 0.03, "c": 0.011, "d": 0.0001, "e": 0.035}
+    best_score = float("inf")
+
+    df_eval = df_clean.copy()
+    eval_mask = (df_eval["window_open_flag"] == 0).values
+    actuals = df_eval["int_temp_min"].values
+
+    for a in a_grid:
+        for b in b_grid:
+            for c in c_grid:
+                for d in d_grid:
+                    for e in e_grid:
+                        preds = simulate_inertia(df_eval, a, b, c, d, e)
+                        valid_mask = eval_mask & ~np.isnan(actuals)
+                        if not np.any(valid_mask): continue
+                        diff = actuals[valid_mask] - preds[valid_mask]
+                        normal_error_mask = np.abs(diff) < 2.5
+                        if not np.any(normal_error_mask): continue
+                        filtered_diff = diff[normal_error_mask]
+                        score = np.percentile(np.abs(filtered_diff), 90) + np.abs(np.mean(filtered_diff))
+                        if score < best_score:
+                            best_score = score
+                            best_params = {"a": a, "b": b, "c": c, "d": d, "e": e}
+
+    # Fine tuning via scipy
+    def objective(x):
+        a, b, c, d, e = x[0], x[1], x[2], x[3], x[4]
+        if a < 0 or b < 0 or d < 0 or e < 0: return 1e6
+        preds = simulate_inertia(df_eval, a, b, c, d, e)
+        valid_mask = eval_mask & ~np.isnan(actuals)
+        if not np.any(valid_mask): return 1e6
+        diff = actuals[valid_mask] - preds[valid_mask]
+        normal_error_mask = np.abs(diff) < 2.5
+        if not np.any(normal_error_mask): return 1e6
+        filtered_diff = diff[normal_error_mask]
+        return float(np.percentile(np.abs(filtered_diff), 90) + (1.0 * np.abs(np.mean(filtered_diff))))
+
+    result = minimize(objective, [best_params["a"], best_params["b"], best_params["c"], best_params["d"], best_params["e"]], method="Nelder-Mead", options={"maxiter": 100, "xatol": 1e-5})
+    best_params_std = {"a": float(result.x[0]), "b": float(result.x[1]), "c": float(result.x[2]), "d": float(result.x[3]), "e": float(result.x[4])}
+    rmse_std = float(result.fun)
+
     joblib.dump(best_params_std, MODEL_INT_STD_PATH)
 
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_rf, "success", f"RF Models + STD trained. STD params: {best_params_std}"))
+    """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_rf, "success", f"Models trained. STD params: {best_params_std}"))
     conn.commit()
     conn.close()
 
-    # CRical: Clear the API cache so future predictions use the newly trained models!
-    _api_cache.clear()
-    print(f"[{datetime.now()}] Models retrained successfully. API cache cleared.")
+    # Invalidate cache so next requests trigger re-simulation with new models
+    clear_caches()
+    print(f"[{datetime.now()}] Models retrained successfully. Simulation cache invalidated.")
 
     return {
         "status": "success",
@@ -496,31 +549,24 @@ def train_models():
     }
 
 @app.get("/api/forecast/ext")
-@cached_endpoint(ttl_seconds=300)
 async def forecast_ext():
     if not os.path.exists(MODEL_EXT_PATH):
         raise HTTPException(status_code=400, detail="Exterior model not trained.")
 
-    model = joblib.load(MODEL_EXT_PATH)
-    df = load_and_prepare_data()
-    df_features = df.dropna(subset=FEATURES_EXT)
+    df = get_cached_simulation_df()
+    df_features = df.dropna(subset=["predicted_ext_temp"])
     if df_features.empty:
         return {"status": "success", "forecasts": []}
 
-    preds = model.predict(df_features[FEATURES_EXT])
-    df_features["predicted_ext_temp"] = [round(float(p), 2) for p in preds]
-
+    df_features["predicted_ext_temp"] = df_features["predicted_ext_temp"].apply(lambda x: round(float(x), 2))
     return {"status": "success", "forecasts": df_features[["timestamp", "predicted_ext_temp"]].to_dict(orient="records")}
 
-def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
-    # Utilisation d'un timestamp Pandas naïf (sans fuseau) pour 'now'
+def get_next_exterior_peak(df: pd.DataFrame) -> dict:
     now = pd.Timestamp.now(tz="UTC").tz_localize(None)
 
-    # Conversion propre de la colonne timestamp en datetime naïf
     df = df.copy()
     df["_dt"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
 
-    # 1. On autorise l'historique récent (jusqu'à 10h en arrière) pour capter un pic en cours ou tout juste passé
     start_window = now - pd.Timedelta(hours=10)
     limit_24h = now + pd.Timedelta(hours=24)
 
@@ -528,21 +574,14 @@ def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
     if window_df.empty:
         return {"peak_temp": None, "timestamp": None}
 
-    feat_df = window_df.dropna(subset=FEATURES_EXT)
+    feat_df = window_df.dropna(subset=["predicted_ext_temp"])
     if feat_df.empty:
         return {"peak_temp": None, "timestamp": None}
 
-    feat_df["predicted_ext"] = model_ext.predict(feat_df[FEATURES_EXT])
-
-    if feat_df.empty:
-        return {"peak_temp": None, "timestamp": None}
-
-    # 2. On cherche le pic global sur cette large fenêtre (passé récent + 24h futur)
-    max_idx = feat_df["predicted_ext"].idxmax()
+    max_idx = feat_df["predicted_ext_temp"].idxmax()
     peak_row = feat_df.loc[max_idx]
     peak_dt = peak_row["_dt"]
 
-    # 3. Filtrage strict : le pic doit se situer entre 0 et 6 heures dans le futur par rapport à 'now'
     time_diff_hours = (peak_dt - now).total_seconds() / 3600.0
     if time_diff_hours < 0.0 or time_diff_hours > 6.0:
         return {"peak_temp": None, "timestamp": None}
@@ -553,166 +592,14 @@ def get_next_exterior_peak(df: pd.DataFrame, model_ext) -> dict:
         iso_timestamp += "Z"
 
     return {
-        "peak_temp": round(float(peak_row["predicted_ext"]), 2),
+        "peak_temp": round(float(peak_row["predicted_ext_temp"]), 2),
         "timestamp": iso_timestamp
     }
 
-def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> datetime | None:
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    timestamps = pd.to_datetime(df["timestamp"])
-    ext_vals = df["ext_temp"].fillna(df["meteo_temp"]).values
-
-    n = len(df)
-    required_consecutive_steps = 6  # 1 heure de persistance (6 x 10 min)
-
-    for i in range(n):
-        dt = timestamps.iloc[i]
-
-        if dt > now and not np.isnan(preds_std[i]):
-            is_stable_inversion = True
-
-            for j in range(required_consecutive_steps):
-                idx = i + j
-                if idx >= n or np.isnan(preds_std[idx]) or pd.isna(ext_vals[idx]):
-                    is_stable_inversion = False
-                    break
-
-                if not (ext_vals[idx] < (preds_std[idx] - 0.5)):
-                    is_stable_inversion = False
-                    break
-
-            if is_stable_inversion:
-                # Retourne directement l'objet natif datetime (converti depuis le Timestamp pandas)
-                return timestamps.iloc[i].to_pydatetime()
-
-    return None
-
-
-@app.get("/api/forecast/analysis")
-@cached_endpoint(ttl_seconds=300)
-async def forecast_analysis():
-    if not os.path.exists(MODEL_EXT_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
-        raise HTTPException(status_code=400, detail="Models not trained.")
-
-    model_ext = joblib.load(MODEL_EXT_PATH)
-    params_std = joblib.load(MODEL_INT_STD_PATH)
-    a, b, c, d, e = params_std["a"], params_std["b"], params_std["c"], params_std["d"], params_std.get("e", 0.0)
-
-    df = load_and_prepare_data()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-
-    # Predict future exterior temperatures
-    ext_mask = df[FEATURES_EXT].notna().all(axis=1)
-    if not df[ext_mask].empty:
-        df.loc[ext_mask, "predicted_ext_temp"] = model_ext.predict(df[ext_mask][FEATURES_EXT])
-        future_mask = (pd.to_datetime(df["timestamp"]) > now) & df["predicted_ext_temp"].notna()
-        df.loc[future_mask, "ext_temp"] = df.loc[future_mask, "predicted_ext_temp"]
-
-    preds_std = simulate_inertia(df, a, b, c, d, e)
-    df["predicted_int_temp_std"] = preds_std
-
-    # get_next_exterior_peak gère déjà tout (fenêtre 24h, exclusion du 1er point, limite 6h)
-    peak_info = get_next_exterior_peak(df, model_ext)
-
-    # Utilisation de notre fonction robuste avec la persistance d'une heure
-    opening_dt = get_optimal_window_opening_time(df, preds_std)
-    opening_time = opening_dt.strftime("%Y-%m-%d %H:%M:%S") if opening_dt else None
-
-    peak_msg = None
-    if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):
-        from zoneinfo import ZoneInfo
-
-        # Parse the UTC timestamp and convert it to Europe/Paris local time
-        ts_str = str(peak_info["timestamp"])
-        dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        dt_local = dt_utc.astimezone(ZoneInfo("Europe/Paris"))
-
-        # Format the local time as HH:MM
-        time_str = dt_local.strftime("%H:%M")
-        peak_msg = f"Pic extérieur: {peak_info['peak_temp']}°C prévu à {time_str}"
-
-    return clean_for_json({
-        "exterior_peak": peak_info,
-        "opening_time": opening_time,
-        "peak_message": peak_msg
-    })
-
-
-@app.get("/api/forecast/smart")
-@cached_endpoint(ttl_seconds=300)
-async def forecast_smart(scope: str = "all"):
-    """
-    Smart curve using STD before the opening marker, and switching permanently
-    to Random Forest from the opening marker onwards.
-    """
-    if not os.path.exists(MODEL_INT_RF_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
-        raise HTTPException(status_code=400, detail="Models not trained.")
-
-    model_rf = joblib.load(MODEL_INT_RF_PATH)
-    params_std = joblib.load(MODEL_INT_STD_PATH)
-    a, b, c, d, e = params_std["a"], params_std["b"], params_std["c"], params_std["d"], params_std.get("e", 0.0)
-
-    df = load_and_prepare_data()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-
-    # 1. Predict future exterior temp
-    if os.path.exists(MODEL_EXT_PATH):
-        model_ext = joblib.load(MODEL_EXT_PATH)
-        ext_mask = df[FEATURES_EXT].notna().all(axis=1)
-        if not df[ext_mask].empty:
-            df.loc[ext_mask, "predicted_ext_temp"] = model_ext.predict(df[ext_mask][FEATURES_EXT])
-            future_mask = (pd.to_datetime(df["timestamp"]) > now) & df["predicted_ext_temp"].notna()
-            df.loc[future_mask, "ext_temp"] = df.loc[future_mask, "predicted_ext_temp"]
-
-    # 2. Compute STD and RF predictions
-    preds_std = simulate_inertia(df, a, b, c, d, e)
-    df["predicted_int_temp_std"] = preds_std
-
-    df["predicted_int_temp_rf"] = np.nan
-    rf_mask = df[FEATURES_INT].notna().all(axis=1)
-    if not rf_mask.empty:
-        df.loc[rf_mask, "predicted_int_temp_rf"] = model_rf.predict(df[rf_mask][FEATURES_INT])
-
-    timestamps = pd.to_datetime(df["timestamp"])
-
-    # 3. Detect opening time using our robust 1-hour persistence function
-    opening_dt = get_optimal_window_opening_time(df, preds_std)
-
-    smart_series = []
-
-    for i in range(len(df)):
-        row = df.iloc[i]
-        dt = timestamps.iloc[i].replace(tzinfo=timezone.utc).replace(tzinfo=None)
-
-        if scope == "past" and dt > now: continue
-        if scope == "future" and dt <= now: continue
-
-        # 4. Determine whether to use RF or STD
-        if dt <= now:
-            # Past: use historical flag
-            use_rf = (row["window_open_flag"] == 1)
-        else:
-            # Future: once opening_dt is reached, stay on Random Forest permanently
-            if opening_dt and dt > opening_dt:
-                use_rf = True
-            else:
-                use_rf = False
-
-        # Select the appropriate model prediction
-        val = row["predicted_int_temp_rf"] if use_rf else row["predicted_int_temp_std"]
-
-        if not pd.isna(val):
-            ts_ms = int(timestamps.iloc[i].replace(tzinfo=timezone.utc).timestamp() * 1000)
-            smart_series.append([ts_ms, round(float(val), 2)])
-
-    return clean_for_json({"smart_series": smart_series})
-
-
 @app.get("/api/forecast/int")
-@cached_endpoint(ttl_seconds=300)
 async def forecast_int():
     """
-    Provides both Random Forest and STD predictions separately
+    Provides both Gradient Boost and STD predictions separately
     for detailed error validation and analysis.
     """
     if not os.path.exists(MODEL_INT_RF_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
@@ -747,31 +634,152 @@ async def forecast_int():
 
     return clean_for_json({"status": "success", "forecasts": forecasts})
 
-@app.get("/api/metrics/annotated")
-@cached_endpoint(ttl_seconds=300)
-async def get_annotated_metrics():
-    """
-    Returns the historical data enriched with behavioral flags
-    (window_open_flag, thermal_mode, is_fit_ready) computed on the fly.
-    """
-    try:
-        df = load_and_prepare_data()
 
-        # Select relevant columns to keep the JSON payload light
+def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> datetime | None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    timestamps = pd.to_datetime(df["timestamp"])
+    ext_vals = df["ext_temp"].fillna(df["meteo_temp"]).values
+
+    n = len(df)
+    required_consecutive_steps = 6
+    can_trigger = False
+
+    for i in range(n):
+        dt = timestamps.iloc[i]
+
+        if dt > now and not np.isnan(preds_std[i]) and not pd.isna(ext_vals[i]):
+            is_above = ext_vals[i] >= (preds_std[i] - 0.5)
+
+            if is_above:
+                can_trigger = True
+                continue
+
+            # Si on est en dessous du seuil et qu'on a vu un état "au-dessus" avant, c'est un vrai front de bascule
+            if can_trigger:
+                is_stable_inversion = True
+
+                for j in range(required_consecutive_steps):
+                    idx = i + j
+                    if idx >= n or np.isnan(preds_std[idx]) or pd.isna(ext_vals[idx]):
+                        is_stable_inversion = False
+                        break
+
+                    if not (ext_vals[idx] < (preds_std[idx] - 0.5)):
+                        is_stable_inversion = False
+                        break
+
+                if is_stable_inversion:
+                    return timestamps.iloc[i].to_pydatetime()
+
+    return None
+
+@app.get("/api/forecast/analysis")
+async def forecast_analysis():
+    if not os.path.exists(MODEL_EXT_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
+        raise HTTPException(status_code=400, detail="Models not trained.")
+
+    df = get_cached_simulation_df()
+    preds_std = df["predicted_int_temp_std"].values
+
+    peak_info = get_next_exterior_peak(df)
+    opening_dt = get_optimal_window_opening_time(df, preds_std)
+    opening_time = opening_dt.strftime("%Y-%m-%d %H:%M:%S") if opening_dt else None
+
+    peak_msg = None
+    if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):
+        from zoneinfo import ZoneInfo
+        ts_str = str(peak_info["timestamp"])
+        dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        dt_local = dt_utc.astimezone(ZoneInfo("Europe/Paris"))
+        time_str = dt_local.strftime("%H:%M")
+        peak_msg = f"Pic extérieur: {peak_info['peak_temp']}°C prévu à {time_str}"
+
+    return clean_for_json({
+        "exterior_peak": peak_info,
+        "opening_time": opening_time,
+        "peak_message": peak_msg
+    })
+
+@app.get("/api/forecast/smart")
+async def forecast_smart(scope: str = "all"):
+    if not os.path.exists(MODEL_INT_RF_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
+        raise HTTPException(status_code=400, detail="Models not trained.")
+
+    current_ts = get_db_last_timestamp()
+
+    if _smart_json_cache["json"] is not None and _smart_json_cache["timestamp"] == current_ts:
+        return _smart_json_cache["json"]
+
+    df = get_cached_simulation_df()
+    model_int = joblib.load(MODEL_INT_RF_PATH)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    timestamps = pd.to_datetime(df["timestamp"])
+
+    preds_std = df["predicted_int_temp_std"].values
+    opening_dt = get_optimal_window_opening_time(df, preds_std)
+
+    smart_series = []
+
+    for i in range(len(df)):
+        row = df.iloc[i]
+        dt = timestamps.iloc[i].replace(tzinfo=timezone.utc).replace(tzinfo=None)
+
+        if scope == "past" and dt > now: continue
+        if scope == "future" and dt <= now: continue
+
+        if dt <= now:
+            use_rf = (row["window_open_flag"] == 1)
+            val = row["predicted_int_temp_rf"] if use_rf else row["predicted_int_temp_std"]
+
+            if not pd.isna(val):
+                ts_ms = int(timestamps.iloc[i].replace(tzinfo=timezone.utc).timestamp() * 1000)
+                smart_series.append([ts_ms, round(float(val), 2)])
+        else:
+            # Si on bascule en RF dans le futur (ouverture fenêtre)
+            if opening_dt and dt >= opening_dt:
+                end_sim = dt + timedelta(hours=12)
+                init_val = row["predicted_int_temp_std"]
+
+                # Récupération du dictionnaire de prédictions sur les 12 prochaines heures
+                preds_dict = run_ml_simulation_from(df, model_int, start_ts=dt, end_ts=end_sim, init_int_temp=init_val)
+
+                # Injection dans le DataFrame et construction immédiate de la fin de la série
+                for ts_str, pred_val in preds_dict.items():
+                    df.loc[df["timestamp"] == ts_str, "predicted_int_temp_rf"] = pred_val
+
+                    t_dt = pd.to_datetime(ts_str).to_pydatetime()
+                    ts_ms = int(t_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    smart_series.append([ts_ms, round(float(pred_val), 2)])
+
+                # On a nos 12h de prédiction court-terme, on stoppe la boucle et on retourne
+                break
+            else:
+                # Avant l'ouverture dans le futur, on reste sur du STD
+                val = row["predicted_int_temp_std"]
+                if not pd.isna(val):
+                    ts_ms = int(timestamps.iloc[i].replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    smart_series.append([ts_ms, round(float(val), 2)])
+
+    _smart_json_cache["json"] = clean_for_json({"smart_series": smart_series})
+    _smart_json_cache["timestamp"] = current_ts
+    return _smart_json_cache["json"]
+
+
+@app.get("/api/metrics/annotated")
+async def get_annotated_metrics():
+    try:
+        df = get_cached_simulation_df()
+
         columns_to_keep = [
             "timestamp", "ext_temp", "int_temp_min", "co2",
             "window_open_flag", "is_fit_ready", "thermal_mode"
         ]
 
-        # Keep only columns that actually exist in the dataframe to avoid KeyErrors
         existing_cols = [col for col in columns_to_keep if col in df.columns]
-        df_annotated = df[existing_cols]
+        df_annotated = df[existing_cols].copy()
 
-        # Filter out future forecasts (where window_open_flag might just be 0 by default)
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         df_annotated = df_annotated[pd.to_datetime(df_annotated["timestamp"]) <= now_utc]
-
-        # Convert timestamps to string for JSON serialization
         df_annotated.loc[:, "timestamp"] = df_annotated["timestamp"].astype(str)
 
         return clean_for_json({
@@ -795,3 +803,44 @@ def get_last_training():
         return {"status": "success", "last_training": last_train}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.get("/api/admin/predictions")
+async def get_admin_predictions():
+    """
+    Renvoie toutes les inférences des 3 modèles (Ext ML, Int RF, Int STD)
+    et le statut d'ouverture de fenêtre calculé, pour TOUT l'historique ET le futur.
+    Conçu spécifiquement pour superposer ces courbes dans la vue Admin.
+    """
+    try:
+        df = get_cached_simulation_df()
+
+        # On ne sélectionne QUE ce qui est produit par le ML
+        cols = [
+            "timestamp",
+            "predicted_ext_temp",
+            "predicted_int_temp_rf",
+            "predicted_int_temp_std",
+            "window_open_flag"
+        ]
+
+        available_cols = [c for c in cols if c in df.columns]
+        df_out = df[available_cols].copy()
+
+        # Formatage pour le JSON
+        df_out["timestamp"] = df_out["timestamp"].astype(str)
+        df_out = df_out.where(pd.notnull(df_out), None)
+
+        return clean_for_json({
+            "status": "success",
+            "predictions": df_out.to_dict(orient="records")
+        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/clear-cache")
+async def api_clear_simulation_cache():
+    """Clear the ML engine simulation cache."""
+    clear_caches()
+    print(f"[{datetime.now()}] Simulation cache cleared via API.")
+    return {"status": "success", "message": "ML engine simulation cache cleared successfully."}
