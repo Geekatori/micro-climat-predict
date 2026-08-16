@@ -270,10 +270,13 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
     timestamps = pd.to_datetime(df["timestamp"])
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    # Define the 36-hour limit for the interior model
+    int_cutoff_time = now + timedelta(hours=36)
+
     past_mask = timestamps <= now
     future_mask = timestamps > now
 
-    # 1. PASSÉ : Vectorisé en bloc (instantané, pas de boucle lente)
+    # 1. PAST: Vectorized block (instantaneous, no slow loop)
     if not df[past_mask].empty:
         ext_past_feat = df.loc[past_mask, FEATURES_EXT]
         if not ext_past_feat.isna().any(axis=1).all():
@@ -282,12 +285,13 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
 
         if model_int is not None:
             int_past_feat = df.loc[past_mask, FEATURES_INT]
-            df.loc[past_mask, "predicted_int_temp_rf"] = model_int.predict(int_past_feat)
+            # CORRECTION : On ajoute le delta prédit au lag passé
+            delta_int_past = model_int.predict(int_past_feat)
+            df.loc[past_mask, "predicted_int_temp_rf"] = df.loc[past_mask, "int_temp_lag1"] + delta_int_past
 
-    # 2. FUTUR : Boucle récursive uniquement sur la partie future
+    # 2. FUTURE: Recursive loop only on the future part
     future_indices = df[future_mask].index
     if len(future_indices) > 0:
-        # Récupération du dernier point réel connu pour amorcer la récurrence
         last_ext = df.loc[past_mask, "ext_temp"].dropna().iloc[-1] if not df.loc[past_mask, "ext_temp"].dropna().empty else 20.0
         last_int = df.loc[past_mask, "int_temp_min"].dropna().iloc[-1] if not df.loc[past_mask, "int_temp_min"].dropna().empty else 20.0
 
@@ -295,13 +299,12 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
         current_int_lag = last_int
 
         for idx in future_indices:
-            # Injection des lags courants
-            df.loc[idx, "ext_temp_lag1"] = current_ext_lag
-            if model_int is not None:
-                df.loc[idx, "int_temp_lag1"] = current_int_lag
+            current_ts = timestamps[idx]
 
-            # Prédiction Extérieur
+            # Exterior prediction (runs for the entire future)
+            df.loc[idx, "ext_temp_lag1"] = current_ext_lag
             row_ext = df.loc[[idx], FEATURES_EXT]
+
             try:
                 delta_ext = model_ext.predict(row_ext)[0]
                 pred_ext = df.loc[idx, "meteo_temp"] + delta_ext
@@ -309,14 +312,18 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
                 pred_ext = current_ext_lag
 
             df.loc[idx, "predicted_ext_temp"] = pred_ext
-            df.loc[idx, "ext_temp"] = pred_ext  # Nécessaire pour le modèle physique STD en aval
+            df.loc[idx, "ext_temp"] = pred_ext
             current_ext_lag = pred_ext
 
-            # Prédiction Intérieur (RF)
-            if model_int is not None:
+            # Interior prediction (Gradient Boost) limited to 36 hours
+            if model_int is not None and current_ts <= int_cutoff_time:
+                df.loc[idx, "int_temp_lag1"] = current_int_lag
                 row_int = df.loc[[idx], FEATURES_INT]
+
                 try:
-                    pred_int = model_int.predict(row_int)[0]
+                    # CORRECTION : On prédit le delta et on l'ajoute au lag courant
+                    delta_int = model_int.predict(row_int)[0]
+                    pred_int = current_int_lag + delta_int
                 except:
                     pred_int = current_int_lag
 
@@ -332,7 +339,6 @@ def run_ml_simulation_from(
     end_ts: datetime,
     init_int_temp: float
 ) -> dict:
-    # 1. On isole uniquement la tranche utile (pas de copie du passé entier)
     timestamps = pd.to_datetime(df["timestamp"])
     mask = (timestamps >= start_ts) & (timestamps <= end_ts)
     sub_df = df.loc[mask].copy()
@@ -340,20 +346,17 @@ def run_ml_simulation_from(
     if sub_df.empty:
         return {}
 
-    # 2. Initialisation du premier lag avec la valeur fournie
     current_int_lag = init_int_temp
     predictions = {}
 
-    # 3. Boucle uniquement sur le sous-ensemble léger
     for idx, row in sub_df.iterrows():
-        # Inject the current autoregressive lag
         sub_df.loc[idx, "int_temp_lag1"] = current_int_lag
-
-        # Interior prediction (RF) with continuity
         row_int = sub_df.loc[[idx], FEATURES_INT]
 
         try:
-            pred_int = model_int.predict(row_int)[0]
+            # CORRECTION : On prédit le delta et on l'ajoute au lag courant
+            delta_int = model_int.predict(row_int)[0]
+            pred_int = current_int_lag + delta_int
         except Exception as e:
             print(f"Prediction error at {row['timestamp']}: {e}")
             pred_int = current_int_lag
@@ -361,7 +364,6 @@ def run_ml_simulation_from(
         sub_df.loc[idx, "predicted_int_temp_rf"] = pred_int
         current_int_lag = pred_int
 
-        # Store result
         ts_str = str(row["timestamp"])
         predictions[ts_str] = float(pred_int)
 
@@ -465,17 +467,30 @@ def train_models():
     rmse_ext = float(np.sqrt(mean_squared_error(actual_temps, reconstructed_preds)))
     joblib.dump(model_ext_ml, MODEL_EXT_PATH)
 
+    # Target definition: predicting the delta
     X_int = df_clean[FEATURES_INT]
-    y_int = df_clean["int_temp_min"]
-    X_tr_int, X_te_int, y_tr_int, y_te_int = train_test_split(
-        X_int, y_int, test_size=0.2, random_state=42, shuffle=False
+    y_int_delta = df_clean["int_temp_min"] - df_clean["int_temp_lag1"]
+
+    valid_mask = y_int_delta.notna()
+    X_int_clean = X_int[valid_mask]
+    y_int_delta_clean = y_int_delta[valid_mask]
+
+    # Split using the cleaned data
+    X_tr_int, X_te_int, y_tr_int_delta, y_te_int_delta = train_test_split(
+        X_int_clean, y_int_delta_clean, test_size=0.2, random_state=42, shuffle=False
     )
 
     model_int_ml = HistGradientBoostingRegressor(
         max_iter=150, learning_rate=0.05, max_depth=7, random_state=42
     )
-    model_int_ml.fit(X_tr_int, y_tr_int)
-    rmse_int_rf = float(np.sqrt(mean_squared_error(y_te_int, model_int_ml.predict(X_te_int))))
+    model_int_ml.fit(X_tr_int, y_tr_int_delta)
+
+    # Recalculate RMSE on absolute temperatures to keep a coherent metric
+    delta_preds_int_te = model_int_ml.predict(X_te_int)
+    reconstructed_int_preds = X_te_int["int_temp_lag1"] + delta_preds_int_te
+    actual_int_temps = X_te_int["int_temp_lag1"] + y_te_int_delta
+    rmse_int_rf = float(np.sqrt(mean_squared_error(actual_int_temps, reconstructed_int_preds)))
+
     joblib.dump(model_int_ml, MODEL_INT_RF_PATH)
 
     # Grid search optimization for STD model
