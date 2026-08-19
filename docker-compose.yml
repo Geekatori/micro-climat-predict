@@ -72,9 +72,10 @@ services:
     restart: unless-stopped
     container_name: scheduler
     command: >
-      /bin/sh -c "echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
-                  echo '0 3 * * * wget -qO- http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
-                  crond -f -l 8"
+      /bin/sh -c "echo '8,38 * * * * wget -qO- --post-data=\"\" http://data-collector:8000/api/collect' > /etc/crontabs/root &&
+                  echo '0 3 * * * wget -qO- --post-data=\"\" http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
+                  chmod 0600 /etc/crontabs/root &&
+                  crond -f -d 8"
     networks:
       - meteo_network
 
