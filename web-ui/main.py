@@ -522,12 +522,12 @@ async def validation_error_page(request: Request, model: str = "ext", filter: st
                         for item in resp.json().get("forecasts", []):
                             if model == "ext":
                                 val_pred = item.get("predicted_ext_temp")
-                            elif model == "int_rf":
-                                val_pred = item.get("predicted_int_temp_rf")
+                            elif model == "int_gb":
+                                val_pred = item.get("predicted_int_temp_gb")
                             elif model == "int_std":
                                 val_pred = item.get("predicted_int_temp_std")
                             else:  # Par défaut, on prend RF pour "int"
-                                val_pred = item.get("predicted_int_temp_rf")
+                                val_pred = item.get("predicted_int_temp_gb")
 
                             forecast_dict[item["timestamp"]] = val_pred
 

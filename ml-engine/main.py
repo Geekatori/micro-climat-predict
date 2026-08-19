@@ -20,7 +20,7 @@ app = FastAPI()
 
 DB_PATH = "/app/data/metrics.db"
 MODEL_EXT_PATH = "/app/data/model_ext.joblib"
-MODEL_INT_RF_PATH = "/app/data/model_int_rf.joblib"
+MODEL_INT_RF_PATH = "/app/data/model_int_gb.joblib"
 MODEL_INT_STD_PATH = "/app/data/model_int_std.joblib"
 
 LAT = float(os.getenv("LAT", 45.7797))
@@ -265,7 +265,7 @@ def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e
 def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFrame:
     df = df.copy()
     df["predicted_ext_temp"] = np.nan
-    df["predicted_int_temp_rf"] = np.nan
+    df["predicted_int_temp_gb"] = np.nan
 
     timestamps = pd.to_datetime(df["timestamp"])
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -287,7 +287,7 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
             int_past_feat = df.loc[past_mask, FEATURES_INT]
             # CORRECTION : On ajoute le delta prédit au lag passé
             delta_int_past = model_int.predict(int_past_feat)
-            df.loc[past_mask, "predicted_int_temp_rf"] = df.loc[past_mask, "int_temp_lag1"] + delta_int_past
+            df.loc[past_mask, "predicted_int_temp_gb"] = df.loc[past_mask, "int_temp_lag1"] + delta_int_past
 
     # 2. FUTURE: Recursive loop only on the future part
     future_indices = df[future_mask].index
@@ -327,7 +327,7 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
                 except:
                     pred_int = current_int_lag
 
-                df.loc[idx, "predicted_int_temp_rf"] = pred_int
+                df.loc[idx, "predicted_int_temp_gb"] = pred_int
                 current_int_lag = pred_int
 
     return df
@@ -361,7 +361,7 @@ def run_ml_simulation_from(
             print(f"Prediction error at {row['timestamp']}: {e}")
             pred_int = current_int_lag
 
-        sub_df.loc[idx, "predicted_int_temp_rf"] = pred_int
+        sub_df.loc[idx, "predicted_int_temp_gb"] = pred_int
         current_int_lag = pred_int
 
         ts_str = str(row["timestamp"])
@@ -489,7 +489,7 @@ def train_models():
     delta_preds_int_te = model_int_ml.predict(X_te_int)
     reconstructed_int_preds = X_te_int["int_temp_lag1"] + delta_preds_int_te
     actual_int_temps = X_te_int["int_temp_lag1"] + y_te_int_delta
-    rmse_int_rf = float(np.sqrt(mean_squared_error(actual_int_temps, reconstructed_int_preds)))
+    rmse_int_gb = float(np.sqrt(mean_squared_error(actual_int_temps, reconstructed_int_preds)))
 
     joblib.dump(model_int_ml, MODEL_INT_RF_PATH)
 
@@ -547,7 +547,7 @@ def train_models():
     conn.execute("""
         INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_rf, "success", f"Models trained. STD params: {best_params_std}"))
+    """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std}"))
     conn.commit()
     conn.close()
 
@@ -558,7 +558,7 @@ def train_models():
     return {
         "status": "success",
         "rmse_ext": round(rmse_ext, 4),
-        "rmse_int_rf": round(rmse_int_rf, 4),
+        "rmse_int_gb": round(rmse_int_gb, 4),
         "rmse_int_std": round(rmse_std, 4),
         "params_std": best_params_std
     }
@@ -620,7 +620,7 @@ async def forecast_int():
     if not os.path.exists(MODEL_INT_RF_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
         raise HTTPException(status_code=400, detail="Models not trained.")
 
-    model_rf = joblib.load(MODEL_INT_RF_PATH)
+    model_gb = joblib.load(MODEL_INT_RF_PATH)
     params_std = joblib.load(MODEL_INT_STD_PATH)
     a, b, c, d, e = params_std["a"], params_std["b"], params_std["c"], params_std["d"], params_std.get("e", 0.0)
 
@@ -629,10 +629,10 @@ async def forecast_int():
     preds_std = simulate_inertia(df, a, b, c, d, e)
     df["predicted_int_temp_std"] = preds_std
 
-    df["predicted_int_temp_rf"] = np.nan
+    df["predicted_int_temp_gb"] = np.nan
     rf_mask = df[FEATURES_INT].notna().all(axis=1)
     if not df[rf_mask].empty:
-        df.loc[rf_mask, "predicted_int_temp_rf"] = model_rf.predict(df[rf_mask][FEATURES_INT])
+        df.loc[rf_mask, "predicted_int_temp_gb"] = model_gb.predict(df[rf_mask][FEATURES_INT])
 
     forecasts = []
     timestamps = pd.to_datetime(df["timestamp"])
@@ -643,7 +643,7 @@ async def forecast_int():
 
         forecasts.append({
             "timestamp": ts_str,
-            "predicted_int_temp_rf": round(float(row["predicted_int_temp_rf"]), 2) if pd.notna(row["predicted_int_temp_rf"]) else None,
+            "predicted_int_temp_gb": round(float(row["predicted_int_temp_gb"]), 2) if pd.notna(row["predicted_int_temp_gb"]) else None,
             "predicted_int_temp_std": round(float(row["predicted_int_temp_std"]), 2) if pd.notna(row["predicted_int_temp_std"]) else None
         })
 
@@ -743,8 +743,8 @@ async def forecast_smart(scope: str = "all"):
         if scope == "future" and dt <= now: continue
 
         if dt <= now:
-            use_rf = (row["window_open_flag"] == 1)
-            val = row["predicted_int_temp_rf"] if use_rf else row["predicted_int_temp_std"]
+            use_gb = (row["window_open_flag"] == 1)
+            val = row["predicted_int_temp_gb"] if use_gb else row["predicted_int_temp_std"]
 
             if not pd.isna(val):
                 ts_ms = int(timestamps.iloc[i].replace(tzinfo=timezone.utc).timestamp() * 1000)
@@ -760,7 +760,7 @@ async def forecast_smart(scope: str = "all"):
 
                 # Injection dans le DataFrame et construction immédiate de la fin de la série
                 for ts_str, pred_val in preds_dict.items():
-                    df.loc[df["timestamp"] == ts_str, "predicted_int_temp_rf"] = pred_val
+                    df.loc[df["timestamp"] == ts_str, "predicted_int_temp_gb"] = pred_val
 
                     t_dt = pd.to_datetime(ts_str).to_pydatetime()
                     ts_ms = int(t_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
@@ -833,7 +833,7 @@ async def get_admin_predictions():
         cols = [
             "timestamp",
             "predicted_ext_temp",
-            "predicted_int_temp_rf",
+            "predicted_int_temp_gb",
             "predicted_int_temp_std",
             "window_open_flag"
         ]

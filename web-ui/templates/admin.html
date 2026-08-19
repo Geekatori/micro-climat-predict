@@ -151,7 +151,7 @@
                         if (row.direct_radiation != null) radiation.push({x: tsMs, y: row.direct_radiation});
 
                         if (p.predicted_ext_temp != null) extPred.push({x: tsMs, y: p.predicted_ext_temp});
-                        if (p.predicted_int_temp_rf != null) intRf.push({x: tsMs, y: p.predicted_int_temp_rf});
+                        if (p.predicted_int_temp_gb != null) intRf.push({x: tsMs, y: p.predicted_int_temp_gb});
                         if (p.predicted_int_temp_std != null) intStd.push({x: tsMs, y: p.predicted_int_temp_std});
                         if (p.window_open_flag != null) window.thermalBandData.push({x: tsMs, isOpen: p.window_open_flag});
                     });
@@ -172,7 +172,7 @@
                         let tsMs = parseUtcToLocal(p.timestamp).getTime();
                         if (!extPred.some(pt => pt.x === tsMs)) {
                             if (p.predicted_ext_temp != null) extPred.push({x: tsMs, y: p.predicted_ext_temp});
-                            if (p.predicted_int_temp_rf != null) intRf.push({x: tsMs, y: p.predicted_int_temp_rf});
+                            if (p.predicted_int_temp_gb != null) intRf.push({x: tsMs, y: p.predicted_int_temp_gb});
                             if (p.predicted_int_temp_std != null) intStd.push({x: tsMs, y: p.predicted_int_temp_std});
                             if (p.window_open_flag != null) window.thermalBandData.push({x: tsMs, isOpen: p.window_open_flag});
                         }
