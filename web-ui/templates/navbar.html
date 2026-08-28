@@ -4,17 +4,17 @@
         <div>
             <h1 class="text-sm font-bold text-blue-400 tracking-wide"><a href="/">micro-climat-predict</a></h1>
             <p class="text-[10px] text-gray-400">
-                {% if active_page == 'graph' %}Vue temps réel et prévisions{% elif active_page == 'admin' %}Administration & Pilotage{% elif active_page == 'logs' %}Historique des Opérations{% elif active_page == 'validation' %}Validation des Erreurs{% else %}Pilotage ML{% endif %}
+                {% if active_page == 'index' %}Synthèse en direct{% elif active_page == 'graph' %}Vue temps réel et prévisions{% elif active_page == 'admin' %}Administration & Pilotage{% elif active_page == 'logs' %}Historique des Opérations{% elif active_page == 'validation' %}Validation des Erreurs{% else %}Pilotage ML{% endif %}
             </p>
         </div>
 
-        <!-- Desktop Main Links -->
-        <div class="hidden md:flex items-center gap-3 text-xs font-medium">
-            {% if active_page == 'graph' %}
-                <a href="/admin" class="text-gray-300 hover:text-white transition px-3 py-1.5 bg-gray-700/50 hover:bg-gray-600 rounded-lg border border-gray-600">⚙️ Administration ➔</a>
-            {% else %}
-                <a href="/" class="text-gray-300 hover:text-white transition px-3 py-1 bg-gray-700/50 rounded-lg">⬅️ Graphique principal</a>
+        <!-- Desktop Main Links (3 core views + direct access if not on index) -->
+        <div class="hidden md:flex items-center gap-2 text-xs font-medium">
+            {% if active_page != 'index' %}
+                <a href="/" class="transition px-3 py-1.5 rounded-lg border text-blue-400 hover:text-white bg-blue-950/40 hover:bg-blue-900/50 border-blue-800/60 font-semibold">🏠 Synthèse</a>
             {% endif %}
+            <a href="/graphs" class="transition px-3 py-1.5 rounded-lg border {% if active_page == 'graph' %}bg-blue-600 text-white font-semibold border-blue-500{% else %}text-gray-300 hover:text-white bg-gray-700/50 hover:bg-gray-600 border-gray-600{% endif %}">📈 Graphiques</a>
+            <a href="/admin" class="transition px-3 py-1.5 rounded-lg border {% if active_page in ['admin', 'logs', 'validation'] %}bg-blue-600 text-white font-semibold border-blue-500{% else %}text-gray-300 hover:text-white bg-gray-700/50 hover:bg-gray-600 border-gray-600{% endif %}">⚙️ Administration</a>
         </div>
 
         <!-- Mobile Hamburger Button -->
@@ -27,8 +27,8 @@
         </div>
     </div>
 
-    <!-- Bottom Row: Admin Sub-pages (Desktop) -->
-    {% if active_page != 'graph' %}
+    <!-- Bottom Row: Admin Sub-pages (Desktop) - Visible only in admin section -->
+    {% if active_page in ['admin', 'logs', 'validation'] %}
     <div class="hidden md:flex justify-end items-center w-full pt-2 border-t border-gray-700/60 text-xs font-medium text-gray-300 gap-2">
         <a href="/admin" class="px-2.5 py-1 rounded-md transition {% if active_page == 'admin' %}bg-blue-600 text-white font-semibold{% else %}hover:bg-gray-700 hover:text-white{% endif %}">📊 Tableau de bord</a>
         <a href="/logs" class="px-2.5 py-1 rounded-md transition {% if active_page == 'logs' %}bg-blue-600 text-white font-semibold{% else %}hover:bg-gray-700 hover:text-white{% endif %}">📜 Logs</a>
@@ -38,16 +38,20 @@
 
     <!-- Mobile Dropdown Menu -->
     <div id="mobile-menu" class="hidden absolute top-full left-0 w-full bg-gray-800 border-b border-gray-700 flex flex-col p-4 gap-3 text-xs shadow-xl">
-        {% if active_page == 'graph' %}
-            <a href="/admin" class="text-center text-gray-200 bg-gray-700 hover:bg-gray-600 py-2 rounded-lg border border-gray-600 transition">⚙️ Administration et outils ➔</a>
-        {% else %}
-            <a href="/" class="text-blue-400 hover:text-blue-300 py-1 font-semibold">⬅️ Graphique principal</a>
-            <div class="border-t border-gray-700 pt-2 flex flex-col gap-1.5">
-                <span class="text-[10px] text-gray-500 uppercase tracking-wider">Navigation admin</span>
-                <a href="/admin" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'admin' %}font-bold text-white{% endif %}">📊 Tableau de bord</a>
-                <a href="/logs" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'logs' %}font-bold text-white{% endif %}">📜 Historique des logs</a>
-                <a href="/validation/error" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'validation' %}font-bold text-white{% endif %}">📊 Analyse des erreurs</a>
-            </div>
+        <div class="flex flex-col gap-1.5">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wider">Navigation principale</span>
+            <a href="/" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'index' %}font-bold text-blue-400{% endif %}">🏠 Synthèse</a>
+            <a href="/graphs" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'graph' %}font-bold text-blue-400{% endif %}">📈 Graphiques</a>
+            <a href="/admin" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page in ['admin', 'logs', 'validation'] %}font-bold text-blue-400{% endif %}">⚙️ Administration</a>
+        </div>
+
+        {% if active_page in ['admin', 'logs', 'validation'] %}
+        <div class="border-t border-gray-700 pt-2 flex flex-col gap-1.5">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wider">Sous-menu admin</span>
+            <a href="/admin" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'admin' %}font-bold text-white{% endif %}">📊 Tableau de bord</a>
+            <a href="/logs" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'logs' %}font-bold text-white{% endif %}">📜 Historique des logs</a>
+            <a href="/validation/error" class="text-gray-300 hover:text-white py-1 pl-2 {% if active_page == 'validation' %}font-bold text-white{% endif %}">📊 Analyse des erreurs</a>
+        </div>
         {% endif %}
     </div>
 </nav>

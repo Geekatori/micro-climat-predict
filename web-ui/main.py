@@ -9,6 +9,8 @@ from fastapi import APIRouter, FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import asyncio
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 def clean_for_json(data):
     """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
@@ -22,21 +24,44 @@ def clean_for_json(data):
     return data
 
 app = FastAPI()
+BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory="templates")
 
 HA_URL = os.getenv("HA_URL", "http://supervisor/core/api")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 
-# Les identifiants de tes capteurs dans Home Assistant
+# Configuration des entités Home Assistant
+EXT_ENTITY = os.getenv("EXT_ENTITY", "sensor.exterieur_temperature")
+HUM_ENTITY = os.getenv("HUM_ENTITY", "sensor.exterieur_humidity")
+INT_TEMP_MIN_ENTITY = os.getenv("HA_INTERIOR_TEMP_MIN", "sensor.temperature_interieure_min")
+INT_HUM_ENTITY = os.getenv("INT_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity")
+CO2_ENTITY = os.getenv("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2")
+PM25_ENTITY = os.getenv("PM25_ENTITY", "sensor.atmo_auvergne_rhone_alpes_atmo_pm25")
+PM10_ENTITY = os.getenv("PM10_ENTITY", "sensor.atmo_auvergne_rhone_alpes_atmo_pm10")
+
 ENTITIES = {
-    "ext_temp": os.getenv("HA_EXT_TEMP", "sensor.exterieur_temperature"),
-    "int_temp_min": os.getenv("HA_INTERIOR_TEMP_MIN", "sensor.temperature_interieure_min"),
+    "ext_temp": EXT_ENTITY,
+    "int_temp_min": INT_TEMP_MIN_ENTITY,
     "cor_temp": os.getenv("HA_COR_TEMP", "sensor.temtop_c1plus_temtop_temperature"),
 }
 
 DB_PATH = "/app/data/metrics.db"
 COLLECTOR_URL = os.getenv("COLLECTOR_URL", "http://data-collector:8000")
 ML_ENGINE_URL = os.getenv("ML_ENGINE_URL", "http://ml-engine:8000")
+
+DAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+def format_french_timestamp(iso_str: str | None) -> str:
+    """Format an ISO timestamp string into a friendly French string (e.g., 'jeudi à 12h30')."""
+    if not iso_str:
+        return "--"
+    try:
+        dt_utc = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        dt_local = dt_utc.astimezone(ZoneInfo("Europe/Paris"))
+        day_name = DAYS_FR[dt_local.weekday()]
+        return f"{day_name} à {dt_local.hour}h{dt_local.minute:02d}"
+    except Exception:
+        return "--"
 
 SENSOR_CONFIG = {
     "ext_temp": {"label": "Extérieur (°C) Réel", "color": "#ef4444", "dash": [], "type": "local"},
@@ -64,6 +89,99 @@ async def proxy_admin_predictions():
             return resp.json()
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+async def fetch_temperature_trend(client: httpx.AsyncClient, headers: dict) -> str:
+    """Compare current temperature with the value 1 hour ago to determine the trend arrow."""
+    now_utc = datetime.now(timezone.utc)
+    start_time = now_utc - timedelta(hours=1)
+    try:
+        response = await client.get(
+            f"{HA_URL}/api/history/period/{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}?filter_entity_id={EXT_ENTITY}&end_time={now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            headers=headers,
+            timeout=10.0,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0 and len(data[0]) > 0:
+                old_val = float(data[0][0]["state"])
+                current_val = float(data[0][-1]["state"])
+                diff = current_val - old_val
+                if diff > 0.2: return "↗"
+                elif diff < -0.2: return "↘"
+                else: return "→"
+    except Exception as e:
+        print(f"Error fetching trend: {e}")
+    return ""
+
+async def fetch_weather_data() -> dict:
+    """Fetch all required weather, indoor sensors and air quality sensors from Home Assistant concurrently."""
+    headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+    entities = {
+        "temperature": EXT_ENTITY,
+        "humidity": HUM_ENTITY,
+        "int_temp_min": INT_TEMP_MIN_ENTITY,
+        "int_humidity": INT_HUM_ENTITY,
+        "co2": CO2_ENTITY,
+        "pm25": PM25_ENTITY,
+        "pm10": PM10_ENTITY,
+    }
+    result = {k: None for k in entities}
+    result["last_updated"] = None
+    result["trend"] = ""
+
+    async with httpx.AsyncClient() as client:
+        try:
+            tasks = [client.get(f"{HA_URL}/api/states/{eid}", headers=headers, timeout=10.0) for eid in entities.values()]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            keys = list(entities.keys())
+            for i, resp in enumerate(responses):
+                key = keys[i]
+                if not isinstance(resp, Exception) and resp.status_code == 200:
+                    data = resp.json()
+                    try:
+                        val = float(data.get("state"))
+                        if not math.isnan(val) and not math.isinf(val):
+                            result[key] = val
+                    except (ValueError, TypeError):
+                        pass
+                    if key == "temperature":
+                        result["last_updated"] = data.get("last_updated")
+
+            result["trend"] = await fetch_temperature_trend(client, headers)
+        except Exception as e:
+            print(f"Exception during Home Assistant API calls: {e}")
+    return result
+
+@app.get("/", response_class=HTMLResponse)
+async def main_dashboard(request: Request):
+    """Page d'accueil synthétique (style voisin) avec métriques intérieures."""
+    data = await fetch_weather_data()
+
+    temp_str = f"{data['temperature']:.1f}°C" if data['temperature'] is not None else "--.-°C"
+    trend_str = data["trend"]
+    hum_str = f"{data['humidity']:.0f}%" if data['humidity'] is not None else "--%"
+    int_temp_str = f"{data['int_temp_min']:.1f}°C" if data['int_temp_min'] is not None else "--.-°C"
+    int_hum_str = f"{data['int_humidity']:.0f}%" if data['int_humidity'] is not None else "--%"
+    co2_str = f"{data['co2']:.0f} ppm" if data['co2'] is not None else "-- ppm"
+    pm25_str = f"{data['pm25']:.1f} µg/m³" if data['pm25'] is not None else "-- µg/m³"
+    pm10_str = f"{data['pm10']:.1f} µg/m³" if data['pm10'] is not None else "-- µg/m³"
+    timestamp_str = format_french_timestamp(data["last_updated"])
+
+    html_path = BASE_DIR / "templates" / "index.html"
+    if html_path.exists():
+        html_content = html_path.read_text(encoding="utf-8")
+        html_content = html_content.replace("{temperature}", temp_str)
+        html_content = html_content.replace("{trend}", trend_str)
+        html_content = html_content.replace("{humidity}", hum_str)
+        html_content = html_content.replace("{int_temp}", int_temp_str)
+        html_content = html_content.replace("{int_humidity}", int_hum_str)
+        html_content = html_content.replace("{co2}", co2_str)
+        html_content = html_content.replace("{pm25}", pm25_str)
+        html_content = html_content.replace("{pm10}", pm10_str)
+        html_content = html_content.replace("{timestamp}", timestamp_str)
+        return HTMLResponse(content=html_content)
+
+    return HTMLResponse(content="<h1>Template index.html not found</h1>", status_code=500)
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
@@ -187,9 +305,9 @@ async def logs_page(request: Request):
         }
     )
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/graphs", response_class=HTMLResponse)
 async def main_dashboard(request: Request):
-    return templates.TemplateResponse(request, "index.html", {"active_page": "graph"})
+    return templates.TemplateResponse(request, "graphs.html", {"active_page": "graph"})
 
 @app.get("/widget", response_class=HTMLResponse)
 async def main_dashboard_widget(request: Request):

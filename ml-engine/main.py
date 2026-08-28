@@ -698,7 +698,17 @@ async def forecast_analysis():
 
     peak_info = get_next_exterior_peak(df)
     opening_dt = get_optimal_window_opening_time(df, preds_std)
-    opening_time = opening_dt.strftime("%Y-%m-%d %H:%M:%S") if opening_dt else None
+
+    # Vérification du délai (max 18 heures)
+    opening_time = None
+    if opening_dt:
+        # Assurons-nous que opening_dt possède bien un tzinfo UTC pour la comparaison
+        if opening_dt.tzinfo is None:
+            opening_dt = opening_dt.replace(tzinfo=timezone.utc)
+
+        now_utc = datetime.now(timezone.utc)
+        if (opening_dt - now_utc) <= timedelta(hours=18):
+            opening_time = opening_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     peak_msg = None
     if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):

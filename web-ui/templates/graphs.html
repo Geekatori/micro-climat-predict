@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="page-title">micro-climat-predict</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased min-h-screen flex flex-col">
+    {% include 'navbar.html' %}
+
+    <main class="flex-grow flex flex-col p-2 md:p-4 w-full gap-2 md:gap-4">
+        {% include '_chart_content.html' %}
+    </main>
+</body>
+</html>

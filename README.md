@@ -13,7 +13,7 @@ Le projet repose sur une architecture de microservices avec Docker Compose :
    - Stocke et consolide le tout dans une base de données SQLite unique avec une stratégie de mise à jour glissante.
 
 2. **`ml-engine`** (FastAPI + Scikit-Learn) :
-   - Entraîne des modèles de régression (Random Forest) pour anticiper l'évolution thermique.
+   - Entraîne des modèles de régression (Gradient Boosting) pour anticiper l'évolution thermique.
    - Fournit des endpoints de prévision pour les températures intérieures et extérieures.
 
 3. **`web-ui`** (FastAPI + TailwindCSS + ApexCharts) :
