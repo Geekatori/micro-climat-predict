@@ -116,3 +116,40 @@ Inutile sur un serveur Linux classique (Unraid, etc.).
   capteurs d'ouverture de fenêtres quand ils existent.
 - `HA_INTERIOR_TEMP_MIN` (page d'accueil) attend une entité HA ; l'amont utilise un capteur
   template calculant le minimum des sondes intérieures. À défaut, pointer sur une sonde unique.
+
+### Intégration Home Assistant
+
+Le projet **pousse** ses prédictions dans HA (`POST /api/states/...`) au lieu d'attendre que HA
+vienne les chercher. Aucune ligne à ajouter dans `configuration.yaml`, aucun port à ouvrir : le
+trafic ne part que vers HA. C'est le bon compromis quand on n'a pas d'accès shell sur l'instance.
+
+Trois capteurs sont écrits, tous préfixés par `HA_SENSOR_PREFIX` (`micro_climat` par défaut) :
+
+| Entité | Contenu |
+|---|---|
+| `sensor.<prefix>_ouverture_fenetres` | heure conseillée d'ouverture (`device_class: timestamp`) |
+| `sensor.<prefix>_interieur_dans_6h` | température intérieure prévue à l'horizon `HA_PUBLISH_HORIZON_HOURS` |
+| `sensor.<prefix>_interieur_max_24h` | maximum intérieur prévu sur 24 h, horaire du pic en attribut |
+
+Publication toutes les 30 minutes par le planificateur, aux minutes 12 et 42, soit quatre
+minutes après chaque collecte. Déclenchement manuel :
+
+```bash
+curl http://127.0.0.1:8730/api/publish-ha
+```
+
+**Deux limites assumées.** Un état écrit par `POST /api/states` vit en mémoire : il disparaît à
+chaque redémarrage de HA et revient à la publication suivante, donc au pire trente minutes plus
+tard. Et faute d'identifiant unique, ces entités ne sont ni renommables ni rattachables à une
+pièce depuis l'interface. Passer à MQTT lèvera les deux, au prix d'un broker à installer.
+
+**Fuseau horaire.** Le moteur de prédiction travaille en temps universel naïf. La publication
+convertit en ISO 8601 avec fuseau explicite, sinon HA afficherait l'heure d'ouverture avec deux
+heures de retard en été.
+
+**Courbe de prévision.** `mini-graph-card` ne trace que l'historique enregistré, jamais le futur.
+Pour afficher la courbe prédite dans HA, il faut `apexcharts-card` (HACS) alimentée par la série
+complète, exposée sur `/api-meteo/forecast`.
+
+Un bloc Lovelace prêt à coller pour un dashboard Bubble Card se trouve dans
+`~/perso/home-assistant/lovelace-micro-climat.yaml`.

@@ -12,6 +12,8 @@ import asyncio
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ha_publish import publish_predictions
+
 def clean_for_json(data):
     """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
     if isinstance(data, list):
@@ -475,6 +477,15 @@ async def get_forecast(ml: str = "forecast"):
     if om_points: series_data.append({"name": "Open-Meteo", "data": om_points})
 
     return {"series": series_data, "_debug_errors": errors}
+
+
+@app.get("/api/publish-ha")
+async def api_publish_ha():
+    """Écrit les prédictions dans Home Assistant. Appelé par le planificateur
+    quelques minutes après chaque collecte. Voir ha_publish.py."""
+    result = await publish_predictions()
+    print(f"[{datetime.now()}] publication HA : {result}")
+    return result
 
 
 @app.get("/api-meteo/analysis")

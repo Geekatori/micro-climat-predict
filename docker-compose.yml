@@ -63,6 +63,8 @@ services:
       - CO2_ENTITY=${CO2_ENTITY:-}
       - PM25_ENTITY=${PM25_ENTITY:-}
       - PM10_ENTITY=${PM10_ENTITY:-}
+      - HA_SENSOR_PREFIX=${HA_SENSOR_PREFIX:-micro_climat}
+      - HA_PUBLISH_HORIZON_HOURS=${HA_PUBLISH_HORIZON_HOURS:-6}
     networks:
       - meteo_network
 
@@ -77,6 +79,7 @@ services:
     command: >
       /bin/sh -c "apk add --no-cache tzdata >/dev/null 2>&1 || true;
                   echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
+                  echo '12,42 * * * * wget -qO- http://web-ui:8000/api/publish-ha' >> /etc/crontabs/root &&
                   echo '30 5 * * * wget -qO- --post-data= http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
                   chmod 0600 /etc/crontabs/root &&
                   crond -f -d 8"
