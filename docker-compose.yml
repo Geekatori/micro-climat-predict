@@ -13,6 +13,7 @@ services:
     ports:
       - "127.0.0.1:${COLLECTOR_PORT:-8732}:8000"
     environment:
+      - PYTHONUNBUFFERED=1
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
       - LAT=${LAT}
@@ -54,6 +55,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      - PYTHONUNBUFFERED=1
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
       - ML_ENGINE_URL=http://ml-engine:8000
