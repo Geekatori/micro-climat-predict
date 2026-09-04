@@ -1,0 +1,12 @@
+# Complément pour tester sous Docker Desktop / WSL2 uniquement.
+# Fait pointer le nom de l'instance HA (HA_HOST dans .env) vers l'hôte WSL,
+# où tourne scripts/wsl-ha-relay.py.
+#   python3 scripts/wsl-ha-relay.py 192.168.1.X:8123 &
+#   docker compose -f docker-compose.yml -f compose.wsl.yml up -d
+services:
+  data-collector:
+    extra_hosts:
+      - "${HA_HOST}:host-gateway"
+  web-ui:
+    extra_hosts:
+      - "${HA_HOST}:host-gateway"

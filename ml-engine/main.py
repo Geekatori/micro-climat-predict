@@ -388,6 +388,10 @@ def load_and_prepare_data() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.set_index("timestamp")
 
+    # Une colonne entièrement NULL (ex. co2 sans capteur) sort de SQLite en dtype object,
+    # ce qui fait échouer interpolate(). On force tout en numérique.
+    df = df.apply(pd.to_numeric, errors="coerce")
+
     df = df.resample("10min").mean().interpolate(method="linear").reset_index()
 
     def remove_constant_blocks(dframe, cols=["ext_temp", "int_temp_min"], window=24):

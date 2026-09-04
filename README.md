@@ -55,3 +55,64 @@ L'interface web est ensuite accessible sur : http://localhost:8000 (ou le port c
 
 Ce projet est sous licence AGPL-3.0 (GNU Affero General Public License v3.0).
 Vous êtes libre de l'utiliser, de le modifier et de le distribuer, sous réserve que toute modification ou version réseau dérivée mette également son code source à disposition sous la même licence. Voir le fichier LICENSE pour plus de détails.
+
+---
+
+## Fork : adaptation à une autre maison
+
+Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/jmfavreau/micro-climat-predict)
+(AGPL-3.0), dont le développement amont s'est arrêté en septembre 2026. Le code source complet
+de cette version modifiée est publié ici, conformément à la licence.
+
+### Ce qui change par rapport à l'amont
+
+- **Entités Home Assistant configurables** dans `.env` au lieu d'être codées en dur dans
+  `data-collector/main.py`. Une variable vide désactive le capteur (`CO2_ENTITY=` si l'on n'a
+  pas de capteur CO₂ ; le modèle fonctionne alors sans détection d'ouverture de fenêtre).
+- **Ports liés à `127.0.0.1`** et déplacés hors des plages courantes (8730 à 8732 au lieu de
+  8000 à 8002) : rien n'est exposé sur le réseau. Mettre un reverse proxy ou
+  Tailscale devant si besoin.
+- **Base SQLite en bind mount `./data`** plutôt qu'un volume Docker anonyme, pour qu'elle
+  suive les sauvegardes du dossier.
+- **`LAT`/`LON` transmis au `ml-engine`** (l'amont calculait la position du soleil sur les
+  coordonnées par défaut, quelle que soit la configuration).
+- **Cron d'entraînement corrigé** : la route `/api/train` est en POST, `wget` l'appelait en GET.
+- **Timeout Home Assistant** porté à 120 s et réponse allégée avec `no_attributes` : dix jours
+  d'historique sur six entités dépassaient les 20 s de l'amont et l'échec était silencieux.
+- **Colonnes vides tolérées** dans le `ml-engine` : une colonne entièrement NULL sortait de
+  SQLite en dtype `object` et faisait échouer l'interpolation.
+
+### Démarrage
+
+```bash
+cp .env.example .env      # puis renseigner HA_URL, HA_TOKEN, LAT/LON et les entités
+docker compose up --build -d
+curl "http://127.0.0.1:8732/api/collect?days=10"   # première collecte (10 jours d'historique HA)
+curl -X POST http://127.0.0.1:8731/api/train        # premier entraînement
+```
+
+Interface : http://127.0.0.1:8730 (accueil), `/graphs`, `/admin`, `/logs`.
+Ensuite le planificateur collecte à h+08 et h+38 et réentraîne chaque nuit à **5 h 30 heure
+locale** (le conteneur installe `tzdata` et lit `TZ`, sinon busybox raisonnerait en UTC).
+L'horaire évite volontairement les sauvegardes de 3 h 03 et 4 h 00.
+
+### Test sous Docker Desktop / WSL2
+
+Docker Desktop en mode réseau miroir ne joint pas le LAN, donc pas Home Assistant. Contournement :
+
+```bash
+python3 scripts/wsl-ha-relay.py 192.168.1.X:8123 &        # relais TCP sur l'hôte WSL
+docker compose -f docker-compose.yml -f compose.wsl.yml up -d
+```
+
+`compose.wsl.yml` fait résoudre `HA_HOST` vers l'hôte WSL ; le TLS traverse le relais intact.
+Inutile sur un serveur Linux classique (Unraid, etc.).
+
+### Limites connues
+
+- La détection d'ouverture des fenêtres repose sur un capteur CO₂. Sans lui, le modèle
+  d'inertie ne distingue pas les périodes fenêtres ouvertes, ce qui dégrade la prévision
+  intérieure en été. Pistes : ajouter un capteur CO₂ Zigbee, ou remplacer la détection par les
+  capteurs d'ouverture de fenêtres quand ils existent.
+- `HA_INTERIOR_TEMP_MIN` (page d'accueil) attend une entité HA ; l'amont utilise un capteur
+  template calculant le minimum des sondes intérieures. À défaut, pointer sur une sonde unique.

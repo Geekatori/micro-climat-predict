@@ -19,15 +19,28 @@ LON = float(os.getenv("LON", 3.0863))
 
 DB_PATH = "/app/data/metrics.db"
 
-ENTITIES = {
-    "ext_temp": "sensor.exterieur_temperature",
-    "ext_hum": "sensor.exterieur_humidity",
-    "int_temp": "sensor.0x8c73dafffeda02b5_temperature",
-    "int_hum": "sensor.0x8c73dafffeda02b5_humidity",
-    "cor_temp": "sensor.temtop_c1plus_temtop_temperature",
-    "cor_hum": "sensor.temtop_c1plus_temtop_humidity",
-    "co2": "sensor.temtop_c1plus_temtop_co2",
+# Entités Home Assistant, configurables par variables d'environnement.
+# Une variable vide désactive le capteur correspondant (ex. CO2_ENTITY= si pas de capteur CO2).
+_ENTITY_ENV = {
+    "ext_temp": ("EXT_ENTITY", "sensor.exterieur_temperature"),
+    "ext_hum": ("HUM_ENTITY", "sensor.exterieur_humidity"),
+    "int_temp": ("INT_TEMP_ENTITY", "sensor.0x8c73dafffeda02b5_temperature"),
+    "int_hum": ("INT_HUM_ENTITY", "sensor.0x8c73dafffeda02b5_humidity"),
+    "cor_temp": ("HA_COR_TEMP", "sensor.temtop_c1plus_temtop_temperature"),
+    "cor_hum": ("COR_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity"),
+    "co2": ("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2"),
 }
+ENTITIES = {
+    key: os.getenv(var, default).strip()
+    for key, (var, default) in _ENTITY_ENV.items()
+    if os.getenv(var, default).strip()
+}
+print(f"[collector] Entités HA suivies : {ENTITIES}")
+
+METRIC_COLUMNS = [
+    "ext_temp", "ext_hum", "int_temp", "int_hum", "cor_temp", "cor_hum", "co2",
+    "meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation", "int_temp_min",
+]
 
 _db_cache = {}
 
@@ -142,7 +155,13 @@ async def fetch_weather_data_days(days: int):
         entities_filter = ",".join(ENTITIES.values())
 
         try:
-            ha_resp = await client.get(f"{HA_URL}/api/history/period/{start_str}?filter_entity_id={entities_filter}&end_time={end_str}", headers=ha_headers, timeout=20.0)
+            # no_attributes : on ne garde que state/last_updated, la réponse est 10x plus légère.
+            # Timeout long : 10 jours d'historique sur 6 entités dépassent facilement 20 s.
+            ha_resp = await client.get(
+                f"{HA_URL}/api/history/period/{start_str}?filter_entity_id={entities_filter}&end_time={end_str}&no_attributes",
+                headers=ha_headers, timeout=120.0,
+            )
+            print(f"[{datetime.now()}] HA history HTTP {ha_resp.status_code}")
             if ha_resp.status_code == 200:
                 for entity_history in ha_resp.json():
                     if not entity_history: continue
@@ -154,7 +173,8 @@ async def fetch_weather_data_days(days: int):
                                 val = float(state["state"])
                                 if not math.isnan(val) and not math.isinf(val): ha_data_dict[key].append([dt, val])
                             except: continue
-        except Exception as e: print(f"HA Error: {e}")
+        except Exception as e: print(f"HA Error: {type(e).__name__}: {e}")
+        print(f"[{datetime.now()}] HA points par capteur : { {k: len(v) for k, v in ha_data_dict.items()} }")
 
         meteo_past_points = []
         meteo_future_points = []
@@ -228,9 +248,15 @@ async def run_collection(days: int = None):
             final_past_df = pd.concat(dfs_past, axis=1)
             final_past_df = final_past_df.ffill().reset_index()
 
-            # Always compute int_temp_min dynamically as the minimum between int_temp and cor_temp
-            if "int_temp" in final_past_df.columns and "cor_temp" in final_past_df.columns:
-                final_past_df["int_temp_min"] = final_past_df[["int_temp", "cor_temp"]].min(axis=1)
+            # int_temp_min = minimum des capteurs intérieurs disponibles (int_temp et/ou cor_temp)
+            indoor_cols = [c for c in ("int_temp", "cor_temp") if c in final_past_df.columns]
+            if indoor_cols:
+                final_past_df["int_temp_min"] = final_past_df[indoor_cols].min(axis=1)
+
+            # Colonnes absentes (capteur non configuré) : NULL, pour que l'INSERT ci-dessous reste valide
+            for col in METRIC_COLUMNS:
+                if col not in final_past_df.columns:
+                    final_past_df[col] = float("nan")
 
             numeric_cols_past = final_past_df.select_dtypes(include=["number"]).columns
             final_past_df[numeric_cols_past] = final_past_df[numeric_cols_past].round(2)
