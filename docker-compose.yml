@@ -47,7 +47,10 @@ services:
     container_name: mcp-web-ui
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${WEB_PORT:-8730}:8000"
+      # WEB_BIND : 127.0.0.1 en local, adresse du serveur sur Tower pour
+      # rendre l'interface joignable depuis le LAN. Le moteur et le
+      # collecteur restent volontairement sur la boucle locale.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8730}:8000"
     volumes:
       - ./data:/app/data
     environment:
