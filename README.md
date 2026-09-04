@@ -2,6 +2,8 @@
 
 **micro-climat-predict** est une application conteneurisée conçue pour collecter, stocker et analyser les données micro-climatiques locales (via Home Assistant) et les croiser avec des données météorologiques ouvertes (Open-Meteo) ainsi qu'avec des modèles de positionnement solaire précis. L'objectif final est d'alimenter un moteur de machine learning pour prédire l'évolution thermique intérieure (notamment l'impact des ombres de la rue).
 
+> **Ce qu'il reste à faire : [TODO.md](TODO.md)**, par priorité.
+
 ## Architecture du Projet
 
 Le projet repose sur une architecture de microservices avec Docker Compose :
