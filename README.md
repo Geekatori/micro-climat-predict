@@ -155,3 +155,15 @@ complète, exposée sur `/api-meteo/forecast`.
 
 Un bloc Lovelace prêt à coller pour un dashboard Bubble Card se trouve dans
 `~/perso/home-assistant/lovelace-micro-climat.yaml`.
+
+**Notification d'anticipation.** L'automatisation HA `ouverture_fenetres_anticipee`
+(« Notification : ouvrir les fenêtres bientôt ») prévient 30 minutes avant la bascule prévue,
+à partir de `sensor.<prefix>_ouverture_fenetres`. Son déclencheur est un template contenant
+`now()`, donc réévalué chaque minute, et qui ne se déclenche qu'au passage de faux à vrai :
+une seule notification par bascule.
+
+Elle est le pendant *prédictif* des quatre automatisations « Rue plus froide/chaude que… »
+qui, elles, constatent la bascule au moment où elle arrive. Les deux se cumulent donc le même
+soir : à surveiller si le nombre de notifications devient gênant. Et comme le capteur reste
+indisponible tout l'hiver (voir les limites du modèle hivernal), elle est silencieuse en
+saison froide par construction.
