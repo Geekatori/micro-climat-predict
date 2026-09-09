@@ -88,16 +88,19 @@ services:
       - meteo_network
 
   cron:
-    image: alpine:3.20
+    # Image construite localement (voir scheduler/Dockerfile) et non `alpine:3.20` :
+    # 3.20 est en fin de vie depuis le 01/04/2026, et l'`apk add tzdata` qui etait
+    # dans la commande ci-dessous dependait du reseau AU BOOT du NAS. Son echec etait
+    # avale par un `|| true` et crond repartait en UTC, sans une ligne de log.
+    build: ./scheduler
     restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     container_name: mcp-scheduler
     environment:
-      # tzdata + TZ : sans ca busybox crond raisonne en UTC et l'entrainement
-      # deriverait de deux heures en ete, d'une heure en hiver.
+      # TZ + tzdata (desormais dans l'image) : sans ca busybox crond raisonne en UTC
+      # et l'entrainement deriverait de deux heures en ete, d'une heure en hiver.
       - TZ=${TZ:-Europe/Paris}
     command: >
-      /bin/sh -c "apk add --no-cache tzdata >/dev/null 2>&1 || true;
-                  echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
+      /bin/sh -c "echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
                   echo '12,42 * * * * wget -qO- http://web-ui:8000/api/publish-ha' >> /etc/crontabs/root &&
                   echo '30 5 * * * wget -qO- --post-data= http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
                   chmod 0600 /etc/crontabs/root &&
