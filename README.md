@@ -79,6 +79,12 @@ de cette version modifiée est publié ici, conformément à la licence.
 - **`LAT`/`LON` transmis au `ml-engine`** (l'amont calculait la position du soleil sur les
   coordonnées par défaut, quelle que soit la configuration).
 - **Cron d'entraînement corrigé** : la route `/api/train` est en POST, `wget` l'appelait en GET.
+- **Ordonnanceur construit localement** (`scheduler/Dockerfile`, Alpine 3.22 + `tzdata`) au lieu
+  d'`image: alpine:3.20` avec un `apk add tzdata` dans la commande. Deux raisons : 3.20 est en fin
+  de vie depuis le 01/04/2026, et l'`apk add` rendait le service dépendant du réseau **au boot** —
+  son échec était avalé par un `|| true` et `crond` repartait en UTC, décalant l'entraînement de
+  5 h 30 d'une à deux heures sans une ligne de log. Vérifiable : `docker run --rm --network none
+  -e TZ=Europe/Paris micro-climat-predict-cron date +%Z` doit répondre `CEST`/`CET`, jamais `UTC`.
 - **Timeout Home Assistant** porté à 120 s et réponse allégée avec `no_attributes` : dix jours
   d'historique sur six entités dépassaient les 20 s de l'amont et l'échec était silencieux.
 - **Colonnes vides tolérées** dans le `ml-engine` : une colonne entièrement NULL sortait de
@@ -95,7 +101,8 @@ curl -X POST http://127.0.0.1:8731/api/train        # premier entraînement
 
 Interface : http://127.0.0.1:8730 (accueil), `/graphs`, `/admin`, `/logs`.
 Ensuite le planificateur collecte à h+08 et h+38 et réentraîne chaque nuit à **5 h 30 heure
-locale** (le conteneur installe `tzdata` et lit `TZ`, sinon busybox raisonnerait en UTC).
+locale** (`tzdata` est dans l'image de l'ordonnanceur et `TZ` vient du compose, sinon busybox
+raisonnerait en UTC).
 L'horaire évite volontairement les sauvegardes de 3 h 03 et 4 h 00.
 
 ### Test sous Docker Desktop / WSL2
