@@ -6,7 +6,11 @@
 services:
   data-collector:
     build: ./data-collector
-    restart: unless-stopped
+    # `always` et non `unless-stopped` : sur Unraid, l'arrêt de l'array fait un
+    # `docker stop` par conteneur, et un `unless-stopped` arrêté explicitement ne
+    # repart pas au démarrage suivant — donc plus de publication vers Home
+    # Assistant après un reboot, sans aucune erreur. Constat 1 de l'audit du 09/09.
+    restart: always
     container_name: mcp-data-collector
     volumes:
       - ./data:/app/data
@@ -25,13 +29,15 @@ services:
       - HA_COR_TEMP=${HA_COR_TEMP}
       - COR_HUM_ENTITY=${COR_HUM_ENTITY}
       - CO2_ENTITY=${CO2_ENTITY:-}
+    labels:
+      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/python.png"
     networks:
       - meteo_network
 
   ml-engine:
     build: ./ml-engine
     container_name: mcp-ml-engine
-    restart: unless-stopped
+    restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     ports:
       - "127.0.0.1:${ML_PORT:-8731}:8000"
     volumes:
@@ -40,13 +46,15 @@ services:
       - PYTHONUNBUFFERED=1
       - LAT=${LAT}
       - LON=${LON}
+    labels:
+      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/python.png"
     networks:
       - meteo_network
 
   web-ui:
     build: ./web-ui
     container_name: mcp-web-ui
-    restart: unless-stopped
+    restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     ports:
       # WEB_BIND : 127.0.0.1 en local, adresse du serveur sur Tower pour
       # rendre l'interface joignable depuis le LAN. Le moteur et le
@@ -70,12 +78,18 @@ services:
       - PM10_ENTITY=${PM10_ENTITY:-}
       - HA_SENSOR_PREFIX=${HA_SENSOR_PREFIX:-micro_climat}
       - HA_PUBLISH_HORIZON_HOURS=${HA_PUBLISH_HORIZON_HOURS:-6}
+    # Icône et bouton WebUI dans l'onglet Docker d'Unraid (constat 11). `[IP]` et
+    # `[PORT:8730]` sont des gabarits substitués par Unraid : ne pas les remplacer
+    # par une adresse en dur.
+    labels:
+      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/home-assistant.png"
+      net.unraid.docker.webui: "http://[IP]:[PORT:8730]/"
     networks:
       - meteo_network
 
   cron:
     image: alpine:3.20
-    restart: unless-stopped
+    restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     container_name: mcp-scheduler
     environment:
       # tzdata + TZ : sans ca busybox crond raisonne en UTC et l'entrainement
@@ -88,6 +102,8 @@ services:
                   echo '30 5 * * * wget -qO- --post-data= http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
                   chmod 0600 /etc/crontabs/root &&
                   crond -f -d 8"
+    labels:
+      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/alpine-linux.png"
     networks:
       - meteo_network
 
