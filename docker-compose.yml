@@ -29,6 +29,24 @@ services:
       - HA_COR_TEMP=${HA_COR_TEMP}
       - COR_HUM_ENTITY=${COR_HUM_ENTITY}
       - CO2_ENTITY=${CO2_ENTITY:-}
+    # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
+    # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
+    # l'application avec ses routes — pas seulement qu'un socket est ouvert.
+    #
+    # Pourquoi PAS les routes /api/status/last-* , qui seraient plus parlantes : elles
+    # lisent la base SQLite. Un verrou pendant l'entrainement de 5h30 ferait clignoter
+    # la sonde, et une sonde qui crie faux apprend a ignorer le signal.
+    #
+    # Et pourquoi pas `/` : data-collector et ml-engine n'ont pas de route racine, ils
+    # repondent 404 — et urlopen leve sur un 404. La sonde les aurait declares malades
+    # POUR TOUJOURS. Mesure le 09/09 avant de poser quoi que ce soit.
+    # Constat 7 de l'audit du 09/09.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
     labels:
       net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/python.png"
     networks:
@@ -46,6 +64,24 @@ services:
       - PYTHONUNBUFFERED=1
       - LAT=${LAT}
       - LON=${LON}
+    # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
+    # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
+    # l'application avec ses routes — pas seulement qu'un socket est ouvert.
+    #
+    # Pourquoi PAS les routes /api/status/last-* , qui seraient plus parlantes : elles
+    # lisent la base SQLite. Un verrou pendant l'entrainement de 5h30 ferait clignoter
+    # la sonde, et une sonde qui crie faux apprend a ignorer le signal.
+    #
+    # Et pourquoi pas `/` : data-collector et ml-engine n'ont pas de route racine, ils
+    # repondent 404 — et urlopen leve sur un 404. La sonde les aurait declares malades
+    # POUR TOUJOURS. Mesure le 09/09 avant de poser quoi que ce soit.
+    # Constat 7 de l'audit du 09/09.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
     labels:
       net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/python.png"
     networks:
@@ -81,6 +117,24 @@ services:
     # Icône et bouton WebUI dans l'onglet Docker d'Unraid (constat 11). `[IP]` et
     # `[PORT:8730]` sont des gabarits substitués par Unraid : ne pas les remplacer
     # par une adresse en dur.
+    # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
+    # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
+    # l'application avec ses routes — pas seulement qu'un socket est ouvert.
+    #
+    # Pourquoi PAS les routes /api/status/last-* , qui seraient plus parlantes : elles
+    # lisent la base SQLite. Un verrou pendant l'entrainement de 5h30 ferait clignoter
+    # la sonde, et une sonde qui crie faux apprend a ignorer le signal.
+    #
+    # Et pourquoi pas `/` : data-collector et ml-engine n'ont pas de route racine, ils
+    # repondent 404 — et urlopen leve sur un 404. La sonde les aurait declares malades
+    # POUR TOUJOURS. Mesure le 09/09 avant de poser quoi que ce soit.
+    # Constat 7 de l'audit du 09/09.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
     labels:
       net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/home-assistant.png"
       net.unraid.docker.webui: "http://[IP]:[PORT:8730]/"
