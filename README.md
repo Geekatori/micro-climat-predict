@@ -174,3 +174,43 @@ qui, elles, constatent la bascule au moment où elle arrive. Les deux se cumulen
 soir : à surveiller si le nombre de notifications devient gênant. Et comme le capteur reste
 indisponible tout l'hiver (voir les limites du modèle hivernal), elle est silencieuse en
 saison froide par construction.
+
+## Sondes de santé
+
+Posées le 09/09/2026 ([P2-09](../audit-docker/plan/p2-09-healthchecks.md)) sur les **trois services
+web**. `docker ps` affiche désormais *(healthy)* à côté de leurs noms.
+
+```
+python3 -c "…urlopen('http://127.0.0.1:8000/openapi.json')"   toutes les 60 s, 3 échecs
+```
+
+**Pourquoi `/openapi.json` et pas `/`** : `data-collector` et `ml-engine` n'ont **pas de route
+racine** — ils répondent 404, et `urlopen` lève sur un 404. La sonde proposée au départ les aurait
+déclarés malades **pour toujours**. Mesuré avant de la poser, pas après.
+
+**Pourquoi pas `/api/status/last-collection` et `/api/status/last-training`**, qui seraient plus
+parlantes : elles lisent la base SQLite. Un verrou pendant l'entraînement de 5 h 30 ferait
+clignoter la sonde, et une sonde qui crie faux apprend à ignorer le signal.
+
+**`cron` (`mcp-scheduler`) reste sans sonde, exprès.** Il n'expose rien, et ce qui compte pour lui
+— l'heure juste — n'est pas testable par une sonde périodique. Un `pgrep crond` dirait « en vie »
+alors que le service peut être décalé de deux heures : une sonde qui rassure à tort. Son vrai
+problème a été traité autrement (`scheduler/Dockerfile`, Alpine 3.22 + `tzdata` dans l'image).
+
+## Mettre à jour
+
+L'image est **construite ici**, donc `docker compose pull` ne sert à rien : il n'y a pas d'amont à
+tirer. Ce qui se met à jour, c'est l'**image de base** et les dépendances — et c'est `--pull` qui
+va les chercher. Sans lui, `build` réutilise l'image de base déjà présente et une mise à jour
+n'entre jamais.
+
+```bash
+cd /mnt/user/appdata/micro-climat-predict
+docker compose build --pull
+docker compose up -d
+```
+
+Vérifier ensuite : `docker ps --filter name=mcp-web-ui` et l'interface sur `http://192.168.1.55:8730/`.
+
+`diun` ne surveille pas cette image (elle n'existe dans aucun registre) mais il surveille son
+**image de base**, déclarée dans `/mnt/user/appdata/diun/data/watch.yml`.
