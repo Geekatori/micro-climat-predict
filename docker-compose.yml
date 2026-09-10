@@ -2,6 +2,17 @@
 # Différences avec l'amont : ports liés à 127.0.0.1 et hors plages courantes,
 # base SQLite en bind mount ./data
 # (sauvegardable), LAT/LON transmis au ml-engine, entités HA configurables via .env.
+#
+# Les quatre `net.unraid.docker.icon` ci-dessous pointent sur un PNG servi par Homer
+# et non sur le CDN dashboard-icons : aucune des deux banques d'icônes n'a de météo
+# générique (vérifié le 10/09 — 4 220 et 7 621 icônes, seuls deux logos de marque
+# purement textuels). Unraid télécharge l'icône **côté serveur** (curl depuis le NAS,
+# `getIcon()` de DockerClient.php) puis la met en cache sous son propre domaine dans
+# /var/lib/docker/unraid/images/<conteneur>-icon.png : une URL en HTTP local ne pose
+# donc pas de problème de contenu mixte malgré l'interface Unraid en HTTPS, et Homer
+# n'est sollicité qu'au premier affichage. Corollaire à connaître : **changer cette
+# URL ne suffit pas**, il faut supprimer le cache du conteneur, sinon l'ancienne
+# icône reste affichée indéfiniment.
 
 services:
   data-collector:
@@ -48,7 +59,7 @@ services:
       retries: 3
 
     labels:
-      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/python.png"
+      net.unraid.docker.icon: "http://192.168.1.55:8080/assets/tools/meteo.png"
     networks:
       - meteo_network
 
@@ -83,7 +94,7 @@ services:
       retries: 3
 
     labels:
-      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/python.png"
+      net.unraid.docker.icon: "http://192.168.1.55:8080/assets/tools/meteo.png"
     networks:
       - meteo_network
 
@@ -136,7 +147,7 @@ services:
       retries: 3
 
     labels:
-      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/home-assistant.png"
+      net.unraid.docker.icon: "http://192.168.1.55:8080/assets/tools/meteo.png"
       net.unraid.docker.webui: "http://[IP]:[PORT:8730]/"
     networks:
       - meteo_network
@@ -160,7 +171,7 @@ services:
                   chmod 0600 /etc/crontabs/root &&
                   crond -f -d 8"
     labels:
-      net.unraid.docker.icon: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/alpine-linux.png"
+      net.unraid.docker.icon: "http://192.168.1.55:8080/assets/tools/meteo.png"
     networks:
       - meteo_network
 
