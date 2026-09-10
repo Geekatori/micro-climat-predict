@@ -101,7 +101,6 @@ Interface : http://127.0.0.1:8730 (accueil), `/graphs`, `/admin`, `/logs`.
 Ensuite le planificateur collecte à h+08 et h+38 et réentraîne chaque nuit à **5 h 30 heure
 locale** (`tzdata` est dans l'image de l'ordonnanceur et `TZ` vient du compose, sinon busybox
 raisonnerait en UTC).
-L'horaire évite volontairement les sauvegardes de 3 h 03 et 4 h 00.
 
 ### Test sous Docker Desktop / WSL2
 
