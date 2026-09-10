@@ -2,8 +2,6 @@
 
 **micro-climat-predict** est une application conteneurisée conçue pour collecter, stocker et analyser les données micro-climatiques locales (via Home Assistant) et les croiser avec des données météorologiques ouvertes (Open-Meteo) ainsi qu'avec des modèles de positionnement solaire précis. L'objectif final est d'alimenter un moteur de machine learning pour prédire l'évolution thermique intérieure (notamment l'impact des ombres de la rue).
 
-> **Ce qu'il reste à faire : [TODO.md](TODO.md)**, par priorité.
-
 ## Architecture du Projet
 
 Le projet repose sur une architecture de microservices avec Docker Compose :
@@ -110,7 +108,7 @@ L'horaire évite volontairement les sauvegardes de 3 h 03 et 4 h 00.
 Docker Desktop en mode réseau miroir ne joint pas le LAN, donc pas Home Assistant. Contournement :
 
 ```bash
-python3 scripts/wsl-ha-relay.py 192.168.1.X:8123 &        # relais TCP sur l'hôte WSL
+python3 scripts/wsl-ha-relay.py <ip-home-assistant>:8123 &        # relais TCP sur l'hôte WSL
 docker compose -f docker-compose.yml -f compose.wsl.yml up -d
 ```
 
@@ -205,12 +203,12 @@ va les chercher. Sans lui, `build` réutilise l'image de base déjà présente e
 n'entre jamais.
 
 ```bash
-cd /mnt/user/appdata/micro-climat-predict
+cd /chemin/vers/micro-climat-predict
 docker compose build --pull
 docker compose up -d
 ```
 
-Vérifier ensuite : `docker ps --filter name=mcp-web-ui` et l'interface sur `http://192.168.1.55:8730/`.
+Vérifier ensuite : `docker ps --filter name=mcp-web-ui` et l'interface sur `http://<hôte>:8730/`.
 
 `diun` ne surveille pas cette image (elle n'existe dans aucun registre) mais il surveille son
-**image de base**, déclarée dans `/mnt/user/appdata/diun/data/watch.yml`.
+**image de base**, à déclarer dans le `watch.yml` de diun.

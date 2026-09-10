@@ -1,4 +1,9 @@
 __pycache__
 *.pyc
 data/
+*.db
 .env
+docker-compose.override.yml
+
+# Journal d'exploitation local, propre à l'installation
+TODO.md
