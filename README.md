@@ -244,3 +244,33 @@ Vérifier ensuite : `docker ps --filter name=mcp-web-ui` et l'interface sur `htt
 
 `diun` ne surveille pas cette image (elle n'existe dans aucun registre) mais il surveille son
 **image de base**, à déclarer dans le `watch.yml` de diun.
+
+### Déployer un changement de code, ce qui n'est pas la même chose
+
+Ce qui précède met à jour l'**image de base**. Pour porter une modification du code, `--pull`
+est au contraire à éviter : il ferait entrer une nouvelle image de base dans un déploiement
+ciblé, donc un changement sans rapport avec le correctif. Ne reconstruire que le service
+touché :
+
+```bash
+docker compose up -d --build web-ui
+```
+
+L'enchaînement par `&&` avec une validation préalable n'est pas cosmétique — si la recette
+devient invalide, la reconstruction n'a pas lieu et le conteneur en service reste debout :
+
+```bash
+docker compose config -q && docker compose up -d --build web-ui
+```
+
+**Deux pièges, si la copie déployée n'est pas un clone de ce dépôt.** Rien n'impose qu'elle en
+soit un : un `rsync` ou une copie manuelle sont des installations parfaitement valides.
+
+1. Ne pas supposer un `git pull`. Sur une copie sans `.git`, il échoue en
+   `not a git repository` — et comme les commandes d'une boucle de déploiement sont souvent
+   indépendantes, le `build` qui suit s'exécute quand même, sur des sources inchangées : il
+   réutilise le cache, aucun conteneur n'est recréé, et **rien ne signale que le déploiement
+   n'a pas eu lieu**. Vérifier plutôt le résultat sur la page servie.
+2. La copie déployée peut porter des retouches locales que ce dépôt n'a pas — une URL en dur
+   là où le dépôt met un gabarit, par exemple. Écraser les fichiers en bloc les perdrait
+   silencieusement. Comparer avant, et épargner les fichiers qui divergent.
