@@ -122,6 +122,39 @@ Inutile sur un serveur Linux classique (Unraid, etc.).
   capteurs d'ouverture de fenêtres quand ils existent.
 - `HA_INTERIOR_TEMP_MIN` (page d'accueil) attend une entité HA ; l'amont utilise un capteur
   template calculant le minimum des sondes intérieures. À défaut, pointer sur une sonde unique.
+- La ligne **CO₂** de la page d'accueil est vide sur cette installation : aucun capteur de
+  qualité de l'air n'existe dans l'instance HA (constat du 15/09/2026 — 385 entités, zéro en
+  `µg/m³` ou en `ppm`, et `/api/config` ne liste que le composant de base `air_quality`). Il
+  faut un capteur CO₂ réel, comme dit au premier point ; `CO2_ENTITY` ne pointe aujourd'hui
+  sur rien. Les particules, elles, ne passent plus par HA — voir ci-dessous.
+
+### Qualité de l'air extérieur
+
+Les particules du bloc « Qualité de l'air extérieur » viennent de l'**API qualité de l'air
+d'Open-Meteo**, pas de Home Assistant. Le web-ui l'interroge directement dans
+[`fetch_air_quality()`](web-ui/main.py), en parallèle de la lecture HA, avec un cache mémoire de
+15 minutes (l'amont ne publie qu'un point par heure). Aucune clé, aucun compte : il suffit de
+`LAT` / `LON` dans le `.env`, déjà présents pour le collecteur et désormais transmis aussi au
+web-ui.
+
+Pourquoi pas Home Assistant, alors que le code d'origine lisait `PM25_ENTITY` / `PM10_ENTITY`
+(défauts `sensor.atmo_auvergne_rhone_alpes_atmo_pm25` / `_pm10`) — deux noms hérités de l'amont
+qui ne correspondaient à aucune intégration installée ici, d'où les `-- µg/m³` :
+
+- l'intégration HACS pour la région est [`sebcaps/atmofrance`](https://github.com/sebcaps/atmofrance),
+  qui demande un compte sur le portail de données Atmo France et crée des entités
+  `sensor.pm25_<commune>` ;
+- mais elle expose un **indice ATMO de 1 (bon) à 6 (extrêmement mauvais)**, pas une
+  concentration. Afficher cet indice dans un bloc libellé `µg/m³` aurait été faux, et le
+  relibeller aurait changé la nature de l'information affichée.
+
+Le choix retenu (15/09/2026) garde donc les µg/m³, au prix explicite d'une **valeur modélisée
+CAMS sur la maille et non mesurée en station**. Le lien « détails » du bloc pointe toujours vers
+la dataviz de la station Atmo FR07004, mais l'attribution le dit maintenant : la valeur affichée
+est Open-Meteo, la station est là pour recouper.
+
+Les variables `PM25_ENTITY` et `PM10_ENTITY` n'existent plus, ni dans le code ni dans le
+`docker-compose.yml` ; elles peuvent être retirées du `.env`.
 
 ### Intégration Home Assistant
 

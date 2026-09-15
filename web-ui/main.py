@@ -32,14 +32,34 @@ templates = Jinja2Templates(directory="templates")
 HA_URL = os.getenv("HA_URL", "http://supervisor/core/api")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 
-# Configuration des entités Home Assistant
-EXT_ENTITY = os.getenv("EXT_ENTITY", "sensor.exterieur_temperature")
-HUM_ENTITY = os.getenv("HUM_ENTITY", "sensor.exterieur_humidity")
-INT_TEMP_MIN_ENTITY = os.getenv("HA_INTERIOR_TEMP_MIN", "sensor.temperature_interieure_min")
-INT_HUM_ENTITY = os.getenv("INT_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity")
-CO2_ENTITY = os.getenv("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2")
-PM25_ENTITY = os.getenv("PM25_ENTITY", "sensor.atmo_auvergne_rhone_alpes_atmo_pm25")
-PM10_ENTITY = os.getenv("PM10_ENTITY", "sensor.atmo_auvergne_rhone_alpes_atmo_pm10")
+# Configuration des entités Home Assistant.
+# `docker-compose.yml` passe ces variables en `${VAR:-}` : absentes du `.env`, elles
+# arrivent dans le conteneur en chaîne vide, et `os.getenv` ne retombe alors *pas*
+# sur son défaut (il ne le fait que si la variable est non définie). D'où ce helper,
+# sans quoi une entité oubliée dans le `.env` se traduit par une requête vers
+# `/api/states/` et une valeur muette à l'écran.
+def env_entity(name: str, default: str) -> str:
+    """Return the entity id configured in `name`, treating empty as unset."""
+    return (os.getenv(name) or "").strip() or default
+
+
+EXT_ENTITY = env_entity("EXT_ENTITY", "sensor.exterieur_temperature")
+HUM_ENTITY = env_entity("HUM_ENTITY", "sensor.exterieur_humidity")
+INT_TEMP_MIN_ENTITY = env_entity("HA_INTERIOR_TEMP_MIN", "sensor.temperature_interieure_min")
+INT_HUM_ENTITY = env_entity("INT_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity")
+CO2_ENTITY = env_entity("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2")
+
+# Qualité de l'air : Open-Meteo et non Home Assistant. Aucune intégration HA de la
+# région ne remonte des concentrations en µg/m³ (celles qui existent donnent un indice
+# ATMO de 1 à 6), et l'API Open-Meteo ne demande pas de clé. Contre-partie assumée :
+# valeur modélisée CAMS sur la maille, pas la mesure d'une station. Voir le README.
+LAT = float(os.getenv("LAT", 45.7797))
+LON = float(os.getenv("LON", 3.0863))
+AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+# L'amont ne publie qu'un point par heure : recharger plus souvent ne donnerait
+# rien de neuf et cognerait une API gratuite à chaque rafraîchissement de la page.
+AIR_QUALITY_TTL = timedelta(minutes=15)
+_air_quality_cache: dict = {}
 
 ENTITIES = {
     "ext_temp": EXT_ENTITY,
@@ -124,8 +144,6 @@ async def fetch_weather_data() -> dict:
         "int_temp_min": INT_TEMP_MIN_ENTITY,
         "int_humidity": INT_HUM_ENTITY,
         "co2": CO2_ENTITY,
-        "pm25": PM25_ENTITY,
-        "pm10": PM10_ENTITY,
     }
     result = {k: None for k in entities}
     result["last_updated"] = None
@@ -138,26 +156,77 @@ async def fetch_weather_data() -> dict:
             keys = list(entities.keys())
             for i, resp in enumerate(responses):
                 key = keys[i]
-                if not isinstance(resp, Exception) and resp.status_code == 200:
-                    data = resp.json()
-                    try:
-                        val = float(data.get("state"))
-                        if not math.isnan(val) and not math.isinf(val):
-                            result[key] = val
-                    except (ValueError, TypeError):
-                        pass
-                    if key == "temperature":
-                        result["last_updated"] = data.get("last_updated")
+                if isinstance(resp, Exception):
+                    print(f"HA {entities[key]} ({key}) injoignable : {resp}")
+                    continue
+                if resp.status_code != 200:
+                    # 404 = l'entité n'existe pas dans HA (intégration absente,
+                    # capteur renommé). Sans cette trace, la page affiche juste
+                    # `--` et la panne passe inaperçue.
+                    print(f"HA {entities[key]} ({key}) : HTTP {resp.status_code}")
+                    continue
+                data = resp.json()
+                try:
+                    val = float(data.get("state"))
+                    if not math.isnan(val) and not math.isinf(val):
+                        result[key] = val
+                    else:
+                        print(f"HA {entities[key]} ({key}) : état non numérique {data.get('state')!r}")
+                except (ValueError, TypeError):
+                    print(f"HA {entities[key]} ({key}) : état non numérique {data.get('state')!r}")
+                if key == "temperature":
+                    result["last_updated"] = data.get("last_updated")
 
             result["trend"] = await fetch_temperature_trend(client, headers)
         except Exception as e:
             print(f"Exception during Home Assistant API calls: {e}")
     return result
 
+async def fetch_air_quality() -> dict:
+    """Fetch current PM2.5/PM10 concentrations from the Open-Meteo air quality API."""
+    result = {"pm25": None, "pm10": None}
+    now = datetime.now(timezone.utc)
+
+    cached = _air_quality_cache.get("current")
+    if cached and now - cached["fetched_at"] < AIR_QUALITY_TTL:
+        return cached["data"]
+
+    params = {
+        "latitude": LAT,
+        "longitude": LON,
+        "current": "pm2_5,pm10",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(AIR_QUALITY_URL, params=params, timeout=10.0)
+        if response.status_code != 200:
+            print(f"Open-Meteo qualité de l'air : HTTP {response.status_code}")
+            return result
+        current = response.json().get("current", {})
+        for key, field in (("pm25", "pm2_5"), ("pm10", "pm10")):
+            try:
+                val = float(current[field])
+            except (KeyError, TypeError, ValueError):
+                print(f"Open-Meteo qualité de l'air : champ {field} absent ou non numérique")
+                continue
+            if not math.isnan(val) and not math.isinf(val):
+                result[key] = val
+    except Exception as e:
+        print(f"Open-Meteo qualité de l'air injoignable : {e}")
+        return result
+
+    # On ne mémorise qu'une réponse exploitable : sinon un incident passager
+    # figerait des tirets sur la page pour tout le TTL.
+    if result["pm25"] is not None or result["pm10"] is not None:
+        _air_quality_cache["current"] = {"fetched_at": now, "data": result}
+    return result
+
+
 @app.get("/", response_class=HTMLResponse)
 async def main_dashboard(request: Request):
     """Page d'accueil synthétique (style voisin) avec métriques intérieures."""
-    data = await fetch_weather_data()
+    data, air = await asyncio.gather(fetch_weather_data(), fetch_air_quality())
+    data.update(air)
 
     temp_str = f"{data['temperature']:.1f}°C" if data['temperature'] is not None else "--.-°C"
     trend_str = data["trend"]
