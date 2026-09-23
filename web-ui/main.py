@@ -265,6 +265,7 @@ async def admin_dashboard(request: Request):
     context = {
         "active_page": "admin",
         "db_exists": db_exists,
+        "season_mode": await fetch_season_mode(),
         "total_rows": 0,
         "start_date": "N/A",
         "end_date": "N/A",
@@ -297,6 +298,36 @@ async def admin_dashboard(request: Request):
             print(f"Error fetching admin stats from collector: {e}")
 
     return templates.TemplateResponse(request, "admin.html", context)
+
+async def fetch_season_mode() -> str:
+    """Mode saisonnier courant, lu auprès du moteur de prédiction.
+
+    Le moteur en est seul dépositaire : c'est lui qui s'en sert, et un unique
+    écrivain évite d'avoir à se demander qui a raison quand les deux divergent.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{ML_ENGINE_URL}/api/season")
+            if resp.status_code == 200:
+                return resp.json().get("mode", "chaud")
+    except Exception as exc:
+        print(f"Lecture du mode saisonnier impossible : {exc}")
+    return "chaud"
+
+
+@app.get("/trigger-season")
+async def trigger_season(mode: str = "chaud"):
+    """Bascule saison chaude / saison froide depuis la page d'administration."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{ML_ENGINE_URL}/api/season", params={"mode": mode})
+            if resp.status_code != 200:
+                print(f"Bascule de saison refusée : HTTP {resp.status_code}")
+    except Exception as exc:
+        print(f"Bascule de saison impossible : {exc}")
+
+    return RedirectResponse(url="/admin", status_code=303)
+
 
 @app.get("/trigger-collect")
 async def trigger_collect(days: int = 9):
@@ -571,14 +602,20 @@ async def get_analysis():
         except Exception as e:
             errors.append(str(e))
 
-    inversion_time_iso = None
-    if data.get("opening_time"):
-        inversion_time_iso = str(data["opening_time"]).replace(" ", "T")
-        if not inversion_time_iso.endswith("Z") and "+" not in inversion_time_iso:
-            inversion_time_iso += "Z"
+    def as_utc_iso(value):
+        """« 2026-09-23 15:10:00 » (UTC naïf) -> ISO explicitement UTC."""
+        if not value:
+            return None
+        text = str(value).replace(" ", "T")
+        if not text.endswith("Z") and "+" not in text:
+            text += "Z"
+        return text
 
     return {
-        "inversion_time": inversion_time_iso,
+        "inversion_time": as_utc_iso(data.get("opening_time")),
+        "closing_time": as_utc_iso(data.get("closing_time")),
+        "season_mode": data.get("season_mode", "chaud"),
+        "favorable_now": bool(data.get("favorable_now")),
         "peak_message": data.get("peak_message"),
         "_debug_errors": errors
     }

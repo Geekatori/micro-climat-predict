@@ -76,6 +76,10 @@ services:
       - PYTHONUNBUFFERED=1
       - LAT=${LAT}
       - LON=${LON}
+      # Seuil « intérieur chaud » de la détection d'ouverture par le CO2, en °C.
+      # Vide ou absent vaut 23. Le mode saisonnier, lui, n'est PAS une variable
+      # d'environnement : il se règle depuis /admin et vit dans data/season.json.
+      - INT_HOT_THRESHOLD_C=${INT_HOT_THRESHOLD_C:-}
     # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
     # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
     # l'application avec ses routes — pas seulement qu'un socket est ouvert.

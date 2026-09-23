@@ -156,19 +156,79 @@ est Open-Meteo, la station est là pour recouper.
 Les variables `PM25_ENTITY` et `PM10_ENTITY` n'existent plus, ni dans le code ni dans le
 `docker-compose.yml` ; elles peuvent être retirées du `.env`.
 
+### Mode saisonnier : évacuer ou faire entrer la chaleur
+
+Le conseil d'aération a un **sens**, et ce sens s'inverse avec la saison. En été on ouvre quand
+l'extérieur repasse sous l'intérieur, pour évacuer. D'octobre à avril on cherche l'inverse : le
+milieu de journée est le seul moment où l'extérieur dépasse l'intérieur, et c'est là qu'ouvrir
+fait entrer de la chaleur gratuite.
+
+Le mode se règle **depuis `/admin`**, section « Mode saisonnier », et vaut « chaud » par défaut.
+Deux boutons, pas de calendrier : une règle par mois se trompe sur les canicules de septembre et
+les redoux de mars, et une règle sur les données demande un seuil qu'il faudrait régler à
+l'aveugle. Le choix tient dans `data/season.json`, **hors de `metrics.db`** : le « Reset Total »
+de la même page supprime la base et les modèles, et le réglage de saison n'a aucune raison de
+partir avec eux. La bascule vide les caches de prévision au passage, sans quoi le conseil
+resterait celui de l'autre saison jusqu'à la collecte suivante, une demi-heure plus tard.
+
+**Deux instants sont désormais publiés, pas un.** L'heure de fermeture existait en creux dans le
+code d'origine, jamais exposée. Elle compte plus en saison froide qu'en saison chaude : laisser
+ouvert après le croisement rend la chaleur qu'on venait de faire entrer, alors qu'en été on peut
+laisser ouvert la nuit entière sans dommage.
+
+Quand l'extérieur est **déjà** favorable, il n'y a pas d'heure d'ouverture à annoncer, seulement
+une heure de fermeture. L'entité d'ouverture passe alors à `unknown` avec `creneau_en_cours: true`
+en attribut, et l'interface affiche « Fermer à 17:10 » plutôt qu'un créneau complet.
+
+**L'hystérésis dépend de la saison, et ce n'est pas un réglage de confort.** En été l'inversion
+du soir vaut plusieurs degrés en une heure : exiger un demi-degré d'écart ne coûte rien. En
+automne les deux courbes se frôlent, et cette même marge mange presque tout le créneau. Mesuré
+sur Tower le 23/09/2026 : l'extérieur passe au-dessus de l'intérieur de 15h30 à 18h40, trois
+heures, mais ne dépasse +0,5 °C que cinq pas de dix minutes de suite là où il en faut six. Le
+conseil sautait donc la journée pour désigner le lendemain, au-delà des dix-huit heures
+d'horizon, et ne sortait pas du tout. D'où `FAVORABLE_MARGIN_FROID`, à **0,3 °C** par défaut
+contre 0,5 en saison chaude (`FAVORABLE_MARGIN_CHAUD`), qui rend le vrai créneau, 15h50 à 18h40.
+Le choix n'est pas sur le fil : 0,3, 0,2 et 0,1 donnent le même résultat, c'est un plateau.
+
+La durée de stabilité, elle, reste à six pas dans les deux saisons. C'est le bon bouton à ne
+**pas** tourner : à 0,5 °C et quatre pas, la même journée rendait un créneau de cinquante
+minutes, ce qui n'est pas ce que dit la courbe.
+
+Le seuil qui gouverne la détection, lui, reste un réglage d'expert : `INT_HOT_THRESHOLD_C`
+(23 °C par défaut), naguère codé en dur. Il ne sert qu'à la reconstitution des périodes fenêtres
+ouvertes à partir du CO₂, donc à rien tant que le capteur n'est pas là.
+
+**Ce que la bascule répare au passage.** Le détecteur d'ouverture par le CO₂ tenait pour une
+aération tout intérieur plus chaud que l'extérieur qui se met à baisser. C'est le bon signe en
+été ; en hiver c'est la description de **toutes les nuits**, l'intérieur y étant chauffé et
+l'extérieur toujours plus froid. Laissé tel quel, le mode froid aurait marqué des nuits entières
+« fenêtres ouvertes », ce qui les aurait exclues de l'ajustement du modèle d'inertie via
+`is_fit_ready`, soit exactement les données dont un modèle hivernal a besoin. Les critères de
+température sont donc inversés eux aussi. Réserve à connaître : **faute de capteur CO₂ sur cette
+installation, la branche froide n'a jamais tourné sur des données réelles.** À vérifier à la pose
+de l'Apollo AIR-1, pas avant.
+
 ### Intégration Home Assistant
 
 Le projet **pousse** ses prédictions dans HA (`POST /api/states/...`) au lieu d'attendre que HA
 vienne les chercher. Aucune ligne à ajouter dans `configuration.yaml`, aucun port à ouvrir : le
 trafic ne part que vers HA. C'est le bon compromis quand on n'a pas d'accès shell sur l'instance.
 
-Trois capteurs sont écrits, tous préfixés par `HA_SENSOR_PREFIX` (`micro_climat` par défaut) :
+Quatre capteurs sont écrits, tous préfixés par `HA_SENSOR_PREFIX` (`micro_climat` par défaut) :
 
 | Entité | Contenu |
 |---|---|
 | `sensor.<prefix>_ouverture_fenetres` | heure conseillée d'ouverture (`device_class: timestamp`) |
+| `sensor.<prefix>_fermeture_fenetres` | heure conseillée de fermeture, même classe |
 | `sensor.<prefix>_interieur_dans_6h` | température intérieure prévue à l'horizon `HA_PUBLISH_HORIZON_HOURS` |
 | `sensor.<prefix>_interieur_max_24h` | maximum intérieur prévu sur 24 h, horaire du pic en attribut |
+
+Les deux premiers portent en attribut le `mode_saison` en vigueur, de quoi conditionner une
+automatisation sans la dupliquer. Et l'entité d'ouverture porte `creneau_en_cours` : vrai quand
+l'extérieur est **déjà** favorable, c'est-à-dire quand l'entité est à `unknown` non pas faute de
+conseil, mais parce que les fenêtres devraient déjà être ouvertes. Sans cet attribut les deux
+situations seraient indiscernables, et une automatisation qui teste `unknown` ne saurait pas
+laquelle elle regarde.
 
 Publication toutes les 30 minutes par le planificateur, aux minutes 12 et 42, soit quatre
 minutes après chaque collecte. Déclenchement manuel :
@@ -194,16 +254,28 @@ Un bloc Lovelace prêt à coller pour un dashboard Bubble Card se trouve dans
 `~/perso/home-assistant/lovelace-micro-climat.yaml`.
 
 **Notification d'anticipation.** L'automatisation HA `ouverture_fenetres_anticipee`
-(« Notification : ouvrir les fenêtres bientôt ») prévient 30 minutes avant la bascule prévue,
-à partir de `sensor.<prefix>_ouverture_fenetres`. Son déclencheur est un template contenant
-`now()`, donc réévalué chaque minute, et qui ne se déclenche qu'au passage de faux à vrai :
-une seule notification par bascule.
+(« Notification : ouvrir ou fermer les fenêtres bientôt ») prévient **30 minutes avant
+l'ouverture** conseillée et **15 minutes avant la fermeture**, à partir des deux capteurs
+d'horodatage. Chaque déclencheur est un template contenant `now()`, donc réévalué chaque minute,
+et qui ne se déclenche qu'au passage de faux à vrai : une seule notification par instant. Un
+identifiant de déclencheur (`ouverture` / `fermeture`) choisit le texte.
+
+Le sens du message suit le mode saisonnier, lu sur l'attribut `mode_saison` du capteur :
+« Ouvrir pour faire entrer la chaleur… Fermer vers 18h30 » en saison froide, « l'extérieur
+repasse sous l'intérieur » en saison chaude. Faute d'attribut (les états disparaissent au
+redémarrage de HA, trente minutes au plus), le texte retombe sur la saison chaude, comme le
+projet. Rendu vérifié par `/api/template` sur les états réels le 23/09/2026 ; la version
+précédente est sauvegardée dans `~/perso/home-assistant/backup-2026-09-23/`.
 
 Elle est le pendant *prédictif* des quatre automatisations « Rue plus froide/chaude que… »
-qui, elles, constatent la bascule au moment où elle arrive. Les deux se cumulent donc le même
-soir : à surveiller si le nombre de notifications devient gênant. Et comme le capteur reste
-indisponible tout l'hiver (voir les limites du modèle hivernal), elle est silencieuse en
-saison froide par construction.
+qui, elles, constatent la bascule au moment où elle arrive. Les deux se cumulent donc : à
+surveiller si le nombre de notifications devient gênant, d'autant que la fermeture en ajoute
+une par créneau.
+
+En plein hiver l'extérieur ne dépasse jamais l'intérieur : les capteurs restent alors inconnus
+des semaines durant, et l'automatisation muette avec eux. C'est le comportement attendu, pas une
+panne : l'aération hivernale d'hygiène relève d'une règle distincte qui n'existe pas encore (P6
+du TODO).
 
 ## Sondes de santé
 

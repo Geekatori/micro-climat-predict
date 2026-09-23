@@ -76,6 +76,9 @@
                 series: [...(this.historySeries || []), ...(this.forecastSeries || [])],
                 current: this.currentValues,
                 inversion_time: this.analysisData?.inversion_time,
+                closing_time: this.analysisData?.closing_time,
+                season_mode: this.analysisData?.season_mode,
+                favorable_now: this.analysisData?.favorable_now,
                 peak_message: this.analysisData?.peak_message,
                 generated_at: new Date().toISOString()
             };
@@ -115,6 +118,9 @@
                 series: [...(this.historySeries || []), ...(this.forecastSeries || [])],
                 current: this.currentValues,
                 inversion_time: this.analysisData?.inversion_time,
+                closing_time: this.analysisData?.closing_time,
+                season_mode: this.analysisData?.season_mode,
+                favorable_now: this.analysisData?.favorable_now,
                 peak_message: this.analysisData?.peak_message,
                 generated_at: new Date().toISOString()
             };
@@ -309,25 +315,50 @@
         }
     }
 
-    function updateAlertBanner(peakMsg, inversionTime) {
+    function hhmm(isoString) {
+        const d = new Date(isoString);
+        return isNaN(d.getTime()) ? null
+            : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Le bandeau se montre dès qu'il y a QUELQUE CHOSE à dire : un pic extérieur,
+    // une ouverture, ou une simple fermeture. Auparavant il était conditionné au
+    // seul pic, lequel n'est publié que s'il tombe dans les six heures, donc nul
+    // la plupart du temps : le conseil d'ouverture restait invisible avec lui.
+    function updateAlertBanner(data) {
         const banner = document.getElementById('alert-banner');
         const msgEl = document.getElementById('alert-message');
         const badgeEl = document.getElementById('opening-time-badge');
 
         if (!banner) return;
 
-        if (!peakMsg) {
+        const froid = data.season_mode === 'froid';
+        const opening = data.inversion_time ? hhmm(data.inversion_time) : null;
+        const closing = data.closing_time ? hhmm(data.closing_time) : null;
+
+        if (!data.peak_message && !opening && !closing) {
             banner.classList.add('hidden');
             return;
         }
 
         banner.classList.remove('hidden');
-        msgEl.innerText = peakMsg;
+        msgEl.innerText = data.peak_message
+            || (froid ? "Fenêtre favorable pour faire entrer la chaleur"
+                      : "Fenêtre favorable pour évacuer la chaleur");
 
-        if (inversionTime) {
-            const d = new Date(inversionTime);
-            const timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-            badgeEl.innerText = `Ouvrir à ${timeStr}`;
+        // Trois cas, dans l'ordre où ils servent : une bascule à venir, un créneau
+        // déjà commencé dont seule la fin reste à dire, ou rien d'actionnable.
+        let label = null;
+        if (opening && closing) {
+            label = `Ouvrir ${opening} → fermer ${closing}`;
+        } else if (opening) {
+            label = `Ouvrir à ${opening}`;
+        } else if (closing) {
+            label = `Fermer à ${closing}`;
+        }
+
+        if (label) {
+            badgeEl.innerText = label;
             badgeEl.style.display = 'inline-block';
         } else {
             badgeEl.style.display = 'none';
@@ -335,7 +366,7 @@
     }
 
     // --- Chart Helpers ---
-    function getDynamicAnnotations(minTime, maxTime, inversionTime) {
+    function getDynamicAnnotations(minTime, maxTime, data) {
         let annotations = [];
         let now = new Date();
 
@@ -360,24 +391,34 @@
             }
         }
 
-        if (inversionTime) {
-            let invDate = new Date(inversionTime);
-            let invTimeMs = invDate.getTime();
+        // Deux repères et non plus un seul : la fermeture compte autant que
+        // l'ouverture, et davantage en saison froide, où laisser ouvert après le
+        // croisement rend la chaleur qu'on venait de faire entrer. Ils sont
+        // décalés verticalement pour ne pas se chevaucher quand ils sont proches.
+        const marks = [
+            { iso: data?.inversion_time, text: 'Ouverture', color: '#2563eb', border: '#3b82f6', offsetY: 25 },
+            { iso: data?.closing_time, text: 'Fermeture', color: '#b45309', border: '#f59e0b', offsetY: 60 }
+        ];
 
-            if (invTimeMs >= minTime && invTimeMs <= maxTime) {
-                annotations.push({
-                    x: invTimeMs,
-                    borderColor: '#3b82f6',
-                    strokeDashArray: 0,
-                    borderWidth: 2,
-                    label: {
-                        text: 'Ouverture : ' + invDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
-                        style: { color: '#ffffff', background: '#2563eb', fontSize: '11px', padding: { left: 6, right: 6, top: 4, bottom: 4 }, fontWeight: 'bold' },
-                        orientation: 'horizontal',
-                        offsetY: 25
-                    }
-                });
-            }
+        for (const mark of marks) {
+            if (!mark.iso) continue;
+
+            let markDate = new Date(mark.iso);
+            let markTimeMs = markDate.getTime();
+            if (isNaN(markTimeMs) || markTimeMs < minTime || markTimeMs > maxTime) continue;
+
+            annotations.push({
+                x: markTimeMs,
+                borderColor: mark.border,
+                strokeDashArray: 0,
+                borderWidth: 2,
+                label: {
+                    text: mark.text + ' : ' + markDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+                    style: { color: '#ffffff', background: mark.color, fontSize: '11px', padding: { left: 6, right: 6, top: 4, bottom: 4 }, fontWeight: 'bold' },
+                    orientation: 'horizontal',
+                    offsetY: mark.offsetY
+                }
+            });
         }
         return annotations;
     }
@@ -402,7 +443,7 @@
 
     function processAndRenderChart(data) {
         renderCards(data.current);
-        updateAlertBanner(data.peak_message, data.inversion_time);
+        updateAlertBanner(data);
 
         let seriesData = data.series || [];
         let now = Date.now();
@@ -444,7 +485,7 @@
             strokeDash.push(cfg.dash);
         });
 
-        let chartAnnotations = getDynamicAnnotations(minTime, maxTime, data.inversion_time);
+        let chartAnnotations = getDynamicAnnotations(minTime, maxTime, data);
         const chartContainer = document.querySelector("#chart");
         if (!chartContainer) return;
         const exactHeight = (chartContainer.clientHeight > 50 ? chartContainer.clientHeight : 400) - 15;

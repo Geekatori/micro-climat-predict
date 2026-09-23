@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from scipy.optimize import minimize
+import json
 import os
 import sqlite3
 import joblib
@@ -22,6 +23,15 @@ DB_PATH = "/app/data/metrics.db"
 MODEL_EXT_PATH = "/app/data/model_ext.joblib"
 MODEL_INT_RF_PATH = "/app/data/model_int_gb.joblib"
 MODEL_INT_STD_PATH = "/app/data/model_int_std.joblib"
+
+# Mode saisonnier. Il décide du *sens* du conseil d'aération : en saison chaude on
+# ouvre pour faire sortir la chaleur, en saison froide pour la faire entrer. Le
+# réglage vit dans son propre fichier et non dans `metrics.db`, parce que le
+# « Reset Total » de la page d'administration supprime la base et les modèles :
+# le choix de saison n'a aucune raison de partir avec eux.
+SEASON_PATH = "/app/data/season.json"
+SEASON_MODES = ("chaud", "froid")
+DEFAULT_SEASON = "chaud"
 
 LAT = float(os.getenv("LAT", 45.7797))
 LON = float(os.getenv("LON", 3.0863))
@@ -69,6 +79,44 @@ def clear_caches():
     _simulation_cache["df"] = None
     _smart_json_cache["timestamp"] = None
     _smart_json_cache["json"] = None
+
+def get_season_mode() -> str:
+    """Mode saisonnier courant : « chaud » ou « froid ».
+
+    Le fichier absent ou illisible vaut « chaud », c'est-à-dire le comportement
+    d'origine : une installation neuve conseille l'aération d'été tant que
+    personne n'a touché l'interrupteur de la page d'administration.
+    """
+    try:
+        with open(SEASON_PATH) as handle:
+            mode = json.load(handle).get("mode")
+        if mode in SEASON_MODES:
+            return mode
+    except (OSError, ValueError, AttributeError):
+        pass
+    return DEFAULT_SEASON
+
+
+def set_season_mode(mode: str) -> dict:
+    """Écrit le mode saisonnier et vide les caches.
+
+    Vider les caches n'est pas une précaution : la série « smart » et la
+    simulation sont mémorisées tant que la base ne bouge pas, or la bascule ne
+    touche pas la base. Sans cette purge, le conseil resterait celui de l'autre
+    saison jusqu'à la collecte suivante, une demi-heure plus tard.
+    """
+    if mode not in SEASON_MODES:
+        raise HTTPException(status_code=400, detail=f"Mode inconnu : {mode}")
+
+    os.makedirs(os.path.dirname(SEASON_PATH), exist_ok=True)
+    payload = {"mode": mode, "updated": datetime.now(timezone.utc).isoformat()}
+    with open(SEASON_PATH, "w") as handle:
+        json.dump(payload, handle)
+
+    clear_caches()
+    print(f"[{datetime.now()}] Mode saisonnier : {mode}")
+    return payload
+
 
 def clean_for_json(data):
     """Recursively traverse dictionaries and lists to replace NaN/Inf with None."""
@@ -121,7 +169,30 @@ def add_multiscale_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def add_behavioral_features(df: pd.DataFrame) -> pd.DataFrame:
+# Seuil au-delà duquel on considère l'intérieur « chaud », et donc une ouverture
+# plausible en saison chaude. Était codé en dur à 23 °C (point 3 du P6).
+INT_HOT_THRESHOLD_C = float(os.getenv("INT_HOT_THRESHOLD_C") or 23.0)
+
+
+def add_behavioral_features(df: pd.DataFrame, mode: str | None = None) -> pd.DataFrame:
+    """Reconstitue a posteriori les périodes fenêtres ouvertes, à partir du CO₂.
+
+    Le CO₂ dit *qu'on* a ouvert, la température dit *pourquoi* : c'est cette
+    seconde moitié qui dépend de la saison. En saison chaude, une ouverture se
+    lit comme un intérieur chaud qui se met à baisser alors que l'extérieur est
+    plus frais. En saison froide, le même critère serait vrai presque toutes les
+    nuits, l'intérieur y étant en permanence plus chaud que l'extérieur et
+    baissant dès que le poêle s'éteint : il marquerait des nuits entières
+    « fenêtres ouvertes ». D'où l'inversion ci-dessous, sans laquelle la bascule
+    corromprait `is_fit_ready`, donc l'ajustement du modèle d'inertie.
+
+    Sans capteur CO₂ la fonction ne fait rien : les trois colonnes restent à leur
+    valeur neutre. C'est le cas sur cette installation, et la branche « froid »
+    n'a donc **jamais été confrontée à des données réelles**. À vérifier à la
+    pose de l'Apollo AIR-1 (P4 du TODO), pas avant.
+    """
+    mode = mode or get_season_mode()
+
     df["window_open_flag"] = 0
     df["is_fit_ready"] = 0
     df["thermal_mode"] = 4
@@ -129,24 +200,29 @@ def add_behavioral_features(df: pd.DataFrame) -> pd.DataFrame:
     if "co2" in df.columns and "ext_temp" in df.columns and "int_temp_min" in df.columns:
         co2_drop = df["co2"].diff(6)
         is_co2_dropping = (co2_drop < -70).fillna(False)
-        ext_cooler_than_int = (df["ext_temp"] < (df["int_temp_min"] - 0.5)).fillna(False)
-        int_hot = (df["int_temp_min"] > 23.0).fillna(False)
-
-        is_opening_co2 = is_co2_dropping & ext_cooler_than_int & int_hot
-
-        int_warmer_than_ext = (df["int_temp_min"] > df["ext_temp"]).fillna(False)
-        int_smoothed = df["int_temp_min"].rolling(window=6, min_periods=1).mean()
-        int_smoothed_drop = int_smoothed.diff(3) < 0
-        is_int_smoothed_dropping = int_smoothed_drop.fillna(False)
-
         co2_very_low = (df["co2"] < 700).fillna(False)
 
-        is_opening_cooling = int_warmer_than_ext & is_int_smoothed_dropping & co2_very_low
-        is_opening = is_opening_co2 | is_opening_cooling
+        int_smoothed = df["int_temp_min"].rolling(window=6, min_periods=1).mean()
+
+        if mode == "froid":
+            # On ouvre pour capter un extérieur plus chaud, et l'intérieur monte.
+            ext_favorable = (df["ext_temp"] > (df["int_temp_min"] + 0.5)).fillna(False)
+            int_eligible = ext_favorable
+            is_int_smoothed_moving = (int_smoothed.diff(3) > 0).fillna(False)
+            is_closing_on_temp = (df["ext_temp"] < (df["int_temp_min"] - 0.5)).fillna(False)
+        else:
+            # On ouvre pour évacuer, l'extérieur est plus frais et l'intérieur baisse.
+            ext_favorable = (df["ext_temp"] < (df["int_temp_min"] - 0.5)).fillna(False)
+            int_eligible = (df["int_temp_min"] > INT_HOT_THRESHOLD_C).fillna(False)
+            is_int_smoothed_moving = (int_smoothed.diff(3) < 0).fillna(False)
+            is_closing_on_temp = (df["ext_temp"] > (df["int_temp_min"] + 0.5)).fillna(False)
+
+        is_opening_co2 = is_co2_dropping & ext_favorable & int_eligible
+        is_opening_thermal = ext_favorable & is_int_smoothed_moving & co2_very_low
+        is_opening = is_opening_co2 | is_opening_thermal
 
         co2_rising = (df["co2"].diff(6) > 70).fillna(False)
-        ext_exceeds_int = (df["ext_temp"] > df["int_temp_min"] + 0.5).fillna(False)
-        is_closing = co2_rising | ext_exceeds_int
+        is_closing = co2_rising | is_closing_on_temp
 
         state = pd.Series(0, index=df.index)
         current_state = 0
@@ -654,43 +730,130 @@ async def forecast_int():
     return clean_for_json({"status": "success", "forecasts": forecasts})
 
 
-def get_optimal_window_opening_time(df: pd.DataFrame, preds_std: np.ndarray) -> datetime | None:
+# Hystérésis autour du croisement des deux courbes, en °C. Sans elle, un
+# frôlement ferait clignoter le conseil d'un pas de temps à l'autre.
+#
+# La valeur dépend de la saison, et ce n'est pas un réglage de confort. En été
+# l'inversion du soir vaut plusieurs degrés en une heure : une marge d'un demi
+# degré ne coûte rien. En automne les deux courbes se frôlent, et cette même
+# marge mange presque tout le créneau. Mesuré sur la série de Tower du
+# 23/09/2026 : l'extérieur passe au-dessus de l'intérieur de 15h30 à 18h40, trois
+# heures, mais ne dépasse +0,5 °C que cinq pas de suite là où il en faut six. Le
+# conseil sautait donc la journée pour désigner le lendemain, hors des dix-huit
+# heures d'horizon, et ne sortait pas du tout. À 0,3 °C il rend le vrai créneau,
+# 15h50 à 18h40 ; 0,2 et 0,1 donnent le même, c'est un plateau et non un
+# réglage sur le fil.
+FAVORABLE_MARGIN = {
+    "chaud": float(os.getenv("FAVORABLE_MARGIN_CHAUD") or 0.5),
+    "froid": float(os.getenv("FAVORABLE_MARGIN_FROID") or 0.3),
+}
+
+# Nombre de pas consécutifs exigés pour retenir une bascule. La base est au pas
+# de dix minutes : six pas valent une heure, de quoi écarter les creux passagers.
+REQUIRED_CONSECUTIVE_STEPS = 6
+
+
+def _favorable_series(ext_vals: np.ndarray, preds_std: np.ndarray, mode: str) -> tuple[np.ndarray, np.ndarray]:
+    """Où l'air extérieur sert la saison, et où l'on sait le dire.
+
+    C'est le seul endroit où les deux saisons diffèrent. En saison chaude on
+    cherche le frais : ouvrir n'a de sens que si l'extérieur est *sous*
+    l'intérieur prévu. En saison froide on cherche la chaleur, donc au-dessus.
+
+    Renvoie (favorable, connu) ; `connu` est faux là où l'une des deux courbes
+    manque, et sert à ne pas prendre un trou de données pour une bascule.
+    """
+    known = ~(np.isnan(ext_vals) | np.isnan(preds_std))
+    margin = FAVORABLE_MARGIN.get(mode, FAVORABLE_MARGIN["chaud"])
+
+    with np.errstate(invalid="ignore"):
+        if mode == "froid":
+            favorable = known & (ext_vals > (preds_std + margin))
+        else:
+            favorable = known & (ext_vals < (preds_std - margin))
+
+    return favorable, known
+
+
+def _holds_from(flags: np.ndarray, known: np.ndarray, index: int, steps: int) -> bool:
+    """Vrai si `flags` tient `steps` pas consécutifs depuis `index`, sans trou."""
+    if index + steps > len(flags):
+        return False
+    return bool(known[index:index + steps].all() and flags[index:index + steps].all())
+
+
+def get_window_advice(df: pd.DataFrame, preds_std: np.ndarray, mode: str | None = None) -> dict:
+    """Heures conseillées d'ouverture puis de fermeture des fenêtres.
+
+    Même mécanique dans les deux saisons, seul le sens du croisement change (voir
+    `_favorable_series`) : on cherche le premier front futur où l'extérieur
+    devient favorable et le reste une heure durant, puis le premier front inverse
+    qui suit.
+
+    L'ouverture est nulle quand l'extérieur est **déjà** favorable : il n'y a
+    alors aucune bascule à annoncer, les fenêtres devraient être ouvertes. La
+    fermeture, elle, reste la consigne utile de la journée, et c'est en saison
+    froide qu'elle compte le plus : laisser ouvert après le croisement rend la
+    chaleur que l'on venait de faire entrer.
+    """
+    mode = mode or get_season_mode()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     timestamps = pd.to_datetime(df["timestamp"])
-    ext_vals = df["ext_temp"].fillna(df["meteo_temp"]).values
 
+    ext_source = df["ext_temp"].fillna(df["meteo_temp"])
+    ext_vals = pd.to_numeric(ext_source, errors="coerce").to_numpy(dtype=float)
+    preds = np.asarray(preds_std, dtype=float)
+
+    favorable, known = _favorable_series(ext_vals, preds, mode)
+    is_future = (timestamps > now).to_numpy()
     n = len(df)
-    required_consecutive_steps = 6
-    can_trigger = False
 
-    for i in range(n):
-        dt = timestamps.iloc[i]
+    # État courant, lu sur le dernier point connu du passé plutôt que déduit de
+    # la première valeur du futur : un trou de collecte en fin d'historique ne
+    # doit pas se lire comme « rien n'est favorable ».
+    past_known = np.where(known & ~is_future)[0]
+    favorable_now = bool(favorable[past_known[-1]]) if len(past_known) else False
 
-        if dt > now and not np.isnan(preds_std[i]) and not pd.isna(ext_vals[i]):
-            is_above = ext_vals[i] >= (preds_std[i] - 0.5)
+    opening_idx = None
+    if not favorable_now:
+        for i in range(n):
+            if is_future[i] and _holds_from(favorable, known, i, REQUIRED_CONSECUTIVE_STEPS):
+                opening_idx = i
+                break
 
-            if is_above:
-                can_trigger = True
-                continue
+    closing_idx = None
+    if favorable_now or opening_idx is not None:
+        search_from = opening_idx + 1 if opening_idx is not None else 0
+        unfavorable = ~favorable
+        for i in range(search_from, n):
+            if is_future[i] and _holds_from(unfavorable, known, i, REQUIRED_CONSECUTIVE_STEPS):
+                closing_idx = i
+                break
 
-            # Si on est en dessous du seuil et qu'on a vu un état "au-dessus" avant, c'est un vrai front de bascule
-            if can_trigger:
-                is_stable_inversion = True
+    def at(index):
+        return timestamps.iloc[index].to_pydatetime() if index is not None else None
 
-                for j in range(required_consecutive_steps):
-                    idx = i + j
-                    if idx >= n or np.isnan(preds_std[idx]) or pd.isna(ext_vals[idx]):
-                        is_stable_inversion = False
-                        break
+    return {
+        "mode": mode,
+        "favorable_now": favorable_now,
+        "opening": at(opening_idx),
+        "closing": at(closing_idx),
+    }
 
-                    if not (ext_vals[idx] < (preds_std[idx] - 0.5)):
-                        is_stable_inversion = False
-                        break
 
-                if is_stable_inversion:
-                    return timestamps.iloc[i].to_pydatetime()
+def _within_horizon(moment: datetime | None, hours: int = 18) -> str | None:
+    """Horodatage formaté, ou rien s'il est trop lointain pour être actionnable."""
+    if moment is None:
+        return None
 
-    return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+
+    if (moment - datetime.now(timezone.utc)) > timedelta(hours=hours):
+        return None
+
+    return moment.strftime("%Y-%m-%d %H:%M:%S")
+
 
 @app.get("/api/forecast/analysis")
 async def forecast_analysis():
@@ -701,18 +864,12 @@ async def forecast_analysis():
     preds_std = df["predicted_int_temp_std"].values
 
     peak_info = get_next_exterior_peak(df)
-    opening_dt = get_optimal_window_opening_time(df, preds_std)
+    advice = get_window_advice(df, preds_std)
 
-    # Vérification du délai (max 18 heures)
-    opening_time = None
-    if opening_dt:
-        # Assurons-nous que opening_dt possède bien un tzinfo UTC pour la comparaison
-        if opening_dt.tzinfo is None:
-            opening_dt = opening_dt.replace(tzinfo=timezone.utc)
-
-        now_utc = datetime.now(timezone.utc)
-        if (opening_dt - now_utc) <= timedelta(hours=18):
-            opening_time = opening_dt.strftime("%Y-%m-%d %H:%M:%S")
+    # Au-delà de dix-huit heures, une heure d'ouverture n'est plus un conseil
+    # mais une prévision : on la tait plutôt que de la faire passer pour l'un.
+    opening_time = _within_horizon(advice["opening"])
+    closing_time = _within_horizon(advice["closing"])
 
     peak_msg = None
     if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):
@@ -726,6 +883,9 @@ async def forecast_analysis():
     return clean_for_json({
         "exterior_peak": peak_info,
         "opening_time": opening_time,
+        "closing_time": closing_time,
+        "season_mode": advice["mode"],
+        "favorable_now": advice["favorable_now"],
         "peak_message": peak_msg
     })
 
@@ -734,9 +894,14 @@ async def forecast_smart(scope: str = "all"):
     if not os.path.exists(MODEL_INT_RF_PATH) or not os.path.exists(MODEL_INT_STD_PATH):
         raise HTTPException(status_code=400, detail="Models not trained.")
 
-    current_ts = get_db_last_timestamp()
+    # La clé porte le mode saisonnier et la portée, pas seulement l'état de la
+    # base : la bascule de saison change la série sans toucher aux mesures, et
+    # un appel `scope=past` servait auparavant sa réponse tronquée à l'appel
+    # `scope=all` qui suivait.
+    mode = get_season_mode()
+    cache_key = (get_db_last_timestamp(), mode, scope)
 
-    if _smart_json_cache["json"] is not None and _smart_json_cache["timestamp"] == current_ts:
+    if _smart_json_cache["json"] is not None and _smart_json_cache["timestamp"] == cache_key:
         return _smart_json_cache["json"]
 
     df = get_cached_simulation_df()
@@ -745,7 +910,7 @@ async def forecast_smart(scope: str = "all"):
     timestamps = pd.to_datetime(df["timestamp"])
 
     preds_std = df["predicted_int_temp_std"].values
-    opening_dt = get_optimal_window_opening_time(df, preds_std)
+    opening_dt = get_window_advice(df, preds_std, mode)["opening"]
 
     smart_series = []
 
@@ -790,7 +955,7 @@ async def forecast_smart(scope: str = "all"):
                     smart_series.append([ts_ms, round(float(val), 2)])
 
     _smart_json_cache["json"] = clean_for_json({"smart_series": smart_series})
-    _smart_json_cache["timestamp"] = current_ts
+    _smart_json_cache["timestamp"] = cache_key
     return _smart_json_cache["json"]
 
 
@@ -866,6 +1031,18 @@ async def get_admin_predictions():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/season")
+async def api_get_season():
+    """Mode saisonnier courant, lu par la page d'administration."""
+    return {"status": "success", "mode": get_season_mode(), "modes": list(SEASON_MODES)}
+
+
+@app.post("/api/season")
+async def api_set_season(mode: str = Query(..., description="chaud ou froid")):
+    """Bascule le mode saisonnier et invalide les caches de prévision."""
+    return {"status": "success", **set_season_mode(mode)}
+
 
 @app.get("/api/clear-cache")
 async def api_clear_simulation_cache():

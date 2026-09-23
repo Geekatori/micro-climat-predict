@@ -1,6 +1,6 @@
 """Publication des prédictions dans Home Assistant.
 
-Écrit trois capteurs via l'API REST de HA (``POST /api/states/<entity_id>``).
+Écrit quatre capteurs via l'API REST de HA (``POST /api/states/<entity_id>``).
 
 Pourquoi cette voie plutôt que des capteurs REST côté HA : rien à éditer dans
 ``configuration.yaml`` (l'intégration ``rest`` n'existe qu'en YAML) et aucun port
@@ -117,11 +117,20 @@ async def _fetch_predictions(client: httpx.AsyncClient) -> tuple[dict, list, lis
 
 
 def _build_states(analysis: dict, series: list) -> list[dict]:
-    """Construit les trois états à écrire dans HA."""
+    """Construit les quatre états à écrire dans HA."""
     now = datetime.now(timezone.utc)
     points = _series_points(series)
 
     opening_iso = _to_iso_utc(analysis.get("opening_time"))
+    closing_iso = _to_iso_utc(analysis.get("closing_time"))
+    mode = analysis.get("season_mode", "chaud")
+    favorable_now = bool(analysis.get("favorable_now"))
+
+    # Le libellé dit le *pourquoi*, qui s'inverse avec la saison : ouvrir pour
+    # faire entrer la chaleur en automne, pour l'évacuer en été. Le nom d'entité,
+    # lui, ne bouge pas : le renommer casserait les automatisations et les cartes
+    # Lovelace qui le nomment.
+    but = "faire entrer la chaleur" if mode == "froid" else "évacuer la chaleur"
 
     horizon_val, horizon_dt = _value_at_horizon(points, now, HORIZON_HOURS)
     max_val, max_dt = _max_over(points, now, 24)
@@ -131,10 +140,26 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
             "entity_id": f"sensor.{PREFIX}_ouverture_fenetres",
             "state": opening_iso or "unknown",
             "attributes": {
-                "friendly_name": "Ouverture des fenêtres conseillée",
+                "friendly_name": f"Ouverture des fenêtres conseillée ({but})",
                 "device_class": "timestamp",
                 "icon": "mdi:window-open-variant",
                 "attribution": ATTRIBUTION,
+                "mode_saison": mode,
+                # Vrai quand l'extérieur est DÉJÀ favorable : il n'y a alors pas
+                # d'heure d'ouverture à annoncer, les fenêtres devraient l'être.
+                # C'est ce qui distingue « rien à faire » de « c'est maintenant ».
+                "creneau_en_cours": favorable_now,
+            },
+        },
+        {
+            "entity_id": f"sensor.{PREFIX}_fermeture_fenetres",
+            "state": closing_iso or "unknown",
+            "attributes": {
+                "friendly_name": "Fermeture des fenêtres conseillée",
+                "device_class": "timestamp",
+                "icon": "mdi:window-closed-variant",
+                "attribution": ATTRIBUTION,
+                "mode_saison": mode,
             },
         },
         {
