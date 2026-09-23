@@ -41,6 +41,7 @@ services:
       - HA_COR_TEMP=${HA_COR_TEMP}
       - COR_HUM_ENTITY=${COR_HUM_ENTITY}
       - CO2_ENTITY=${CO2_ENTITY:-}
+      - STOVE_POWER_ENTITY=${STOVE_POWER_ENTITY:-}
     # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
     # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
     # l'application avec ses routes — pas seulement qu'un socket est ouvert.

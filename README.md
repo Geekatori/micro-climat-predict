@@ -69,6 +69,11 @@ de cette version modifiée est publié ici, conformément à la licence.
 - **Entités Home Assistant configurables** dans `.env` au lieu d'être codées en dur dans
   `data-collector/main.py`. Une variable vide désactive le capteur (`CO2_ENTITY=` si l'on n'a
   pas de capteur CO₂ ; le modèle fonctionne alors sans détection d'ouverture de fenêtre).
+- **Puissance du poêle archivée** (`STOVE_POWER_ENTITY`, colonne `stove_power`, en W), pour
+  un chauffage d'appoint sur prise mesurée. L'enregistreur HA purge en une dizaine de jours :
+  sans cette colonne, l'historique de chauffe serait perdu avant d'avoir servi. Le signal
+  est rééchantillonné au maximum sur le pas et prolongé, jamais interpolé. Vide par défaut,
+  et pas encore lu par le modèle.
 - **Ports liés à `127.0.0.1`** et déplacés hors des plages courantes (8730 à 8732 au lieu de
   8000 à 8002) : rien n'est exposé sur le réseau. Mettre un reverse proxy ou
   Tailscale devant si besoin.

@@ -29,6 +29,9 @@ _ENTITY_ENV = {
     "cor_temp": ("HA_COR_TEMP", "sensor.temtop_c1plus_temtop_temperature"),
     "cor_hum": ("COR_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity"),
     "co2": ("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2"),
+    # Puissance de la prise mesurée du poêle à granulés, en W. Sert à repérer les
+    # périodes de chauffe, à masquer lors de l'ajustement du modèle hivernal.
+    "stove_power": ("STOVE_POWER_ENTITY", ""),
 }
 ENTITIES = {
     key: os.getenv(var, default).strip()
@@ -38,7 +41,7 @@ ENTITIES = {
 print(f"[collector] Entités HA suivies : {ENTITIES}")
 
 METRIC_COLUMNS = [
-    "ext_temp", "ext_hum", "int_temp", "int_hum", "cor_temp", "cor_hum", "co2",
+    "ext_temp", "ext_hum", "int_temp", "int_hum", "cor_temp", "cor_hum", "co2", "stove_power",
     "meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation", "int_temp_min",
 ]
 
@@ -61,6 +64,10 @@ def migrate_db(conn):
     if "co2" not in columns:
         conn.execute("ALTER TABLE metrics ADD COLUMN co2 REAL")
         print("Migration: Added 'co2' column to metrics table.")
+
+    if "stove_power" not in columns:
+        conn.execute("ALTER TABLE metrics ADD COLUMN stove_power REAL")
+        print("Migration: Added 'stove_power' column to metrics table.")
 
     if "cloud_cover" not in columns:
         conn.execute("ALTER TABLE metrics ADD COLUMN cloud_cover REAL")
@@ -92,6 +99,7 @@ def init_db():
             cor_temp REAL,
             cor_hum REAL,
             co2 REAL,
+            stove_power REAL,
             meteo_temp REAL,
             meteo_hum REAL,
             wind_speed REAL,
@@ -234,6 +242,20 @@ async def run_collection(days: int = None):
             if data:
                 df = pd.DataFrame(data, columns=["timestamp", key])
                 df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
+                if key == "stove_power":
+                    # La prise ne publie qu'aux changements : le signal est en marches, et
+                    # l'interpoler inventerait des rampes entre deux états. Chaque pas vaut le
+                    # max entre ses propres relevés (pics courts de l'allumage) et l'état hérité
+                    # du pas précédent, qui est son *dernier* relevé et non son max : sinon un
+                    # pic de cinq minutes serait prolongé jusqu'au changement suivant.
+                    # Un pas de plus en fin de série : le ffill global plus bas prolonge alors le
+                    # dernier relevé, et non le max du dernier pas.
+                    steps = df.set_index("timestamp").resample("10min")
+                    peaks = steps.max()
+                    idx = pd.date_range(peaks.index[0], peaks.index[-1] + pd.Timedelta("10min"), freq="10min", name="timestamp")
+                    carried = steps.last().reindex(idx).ffill().shift(1)
+                    dfs_past.append(pd.concat([peaks.reindex(idx), carried], axis=1).max(axis=1).to_frame(key))
+                    continue
                 # Resample individuel par capteur avec interpolation et ffill/bfill
                 dfs_past.append(df.set_index("timestamp").resample("10min").mean().interpolate(method="linear").ffill().bfill())
 
@@ -268,11 +290,11 @@ async def run_collection(days: int = None):
             conn.execute("""
                 INSERT OR IGNORE INTO metrics (
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
+                    cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
                 )
                 SELECT
                     timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, co2, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
+                    cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
                 FROM metrics_temp;
             """)
 
@@ -287,6 +309,7 @@ async def run_collection(days: int = None):
                     cor_temp = COALESCE(metrics_temp.cor_temp, metrics.cor_temp),
                     cor_hum = COALESCE(metrics_temp.cor_hum, metrics.cor_hum),
                     co2 = COALESCE(metrics_temp.co2, metrics.co2),
+                    stove_power = COALESCE(metrics_temp.stove_power, metrics.stove_power),
                     meteo_temp = COALESCE(metrics_temp.meteo_temp, metrics.meteo_temp),
                     meteo_hum = COALESCE(metrics_temp.meteo_hum, metrics.meteo_hum),
                     wind_speed = COALESCE(metrics_temp.wind_speed, metrics.wind_speed),
