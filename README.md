@@ -29,27 +29,21 @@ Le projet repose sur une architecture de microservices avec Docker Compose :
 
 ## Configuration
 
-1. Créez un fichier `.env` à la racine du projet en vous basant sur l'exemple ci-dessous :
-
-```env
-WEB_PORT=8000
-HA_URL=[http://homeassistant.local:8123](http://homeassistant.local:8123)
-HA_TOKEN=votre_token_longue_duree_home_assistant
-LAT=45.7797
-LON=3.0863
-```
-
-2. Vérifiez que les identifiants de vos entités de capteurs Home Assistant correspondent à ceux définis dans data-collector/main.py.
+Copiez `.env.example` en `.env` et renseignez-le : l'URL et le jeton longue durée de Home
+Assistant, `LAT` / `LON`, et les entités de vos capteurs. Contrairement à l'amont, **aucun
+entity_id n'est codé en dur** dans `data-collector/main.py` : tout passe par le `.env`, et une
+variable laissée vide désactive le capteur correspondant.
 
 ## Lancement
-
-Lancez l'ensemble des services avec la commande suivante :
 
 ```bash
 docker compose up --build -d
 ```
 
-L'interface web est ensuite accessible sur : http://localhost:8000 (ou le port configuré dans votre compose).
+Les trois services web écoutent aux ports **8730** (web-ui), **8731** (ml-engine) et **8732**
+(data-collector). Le moteur et le collecteur restent sur la boucle locale ; seule l'interface
+peut être ouverte au réseau, par `WEB_BIND`. Voir *Démarrage* plus bas pour la première
+collecte et le premier entraînement.
 
 ## Licence
 
@@ -74,9 +68,11 @@ de cette version modifiée est publié ici, conformément à la licence.
   sans cette colonne, l'historique de chauffe serait perdu avant d'avoir servi. Le signal
   est rééchantillonné au maximum sur le pas et prolongé, jamais interpolé. Vide par défaut,
   et pas encore lu par le modèle.
-- **Ports liés à `127.0.0.1`** et déplacés hors des plages courantes (8730 à 8732 au lieu de
-  8000 à 8002) : rien n'est exposé sur le réseau. Mettre un reverse proxy ou
-  Tailscale devant si besoin.
+- **Ports liés à `127.0.0.1` par défaut** et déplacés hors des plages courantes (8730 à 8732 au
+  lieu de 8000 à 8002) : rien n'est exposé sans un geste explicite. Seule l'interface peut être
+  ouverte, par `WEB_BIND` ; le moteur et le collecteur restent sur la boucle locale en toute
+  circonstance. La page `/admin` n'ayant **aucune authentification**, ouvrir l'interface au
+  réseau demande un reverse proxy ou Tailscale devant.
 - **Base SQLite en bind mount `./data`** plutôt qu'un volume Docker anonyme, pour qu'elle
   suive les sauvegardes du dossier.
 - **`LAT`/`LON` transmis au `ml-engine`** (l'amont calculait la position du soleil sur les
@@ -188,7 +184,8 @@ en attribut, et l'interface affiche « Fermer à 17:10 » plutôt qu'un créneau
 **L'hystérésis dépend de la saison, et ce n'est pas un réglage de confort.** En été l'inversion
 du soir vaut plusieurs degrés en une heure : exiger un demi-degré d'écart ne coûte rien. En
 automne les deux courbes se frôlent, et cette même marge mange presque tout le créneau. Mesuré
-sur Tower le 23/09/2026 : l'extérieur passe au-dessus de l'intérieur de 15h30 à 18h40, trois
+sur les données réelles de l'installation le 23/09/2026 : l'extérieur passe au-dessus de
+l'intérieur de 15h30 à 18h40, trois
 heures, mais ne dépasse +0,5 °C que cinq pas de dix minutes de suite là où il en faut six. Le
 conseil sautait donc la journée pour désigner le lendemain, au-delà des dix-huit heures
 d'horizon, et ne sortait pas du tout. D'où `FAVORABLE_MARGIN_FROID`, à **0,3 °C** par défaut
@@ -255,8 +252,8 @@ heures de retard en été.
 Pour afficher la courbe prédite dans HA, il faut `apexcharts-card` (HACS) alimentée par la série
 complète, exposée sur `/api-meteo/forecast`.
 
-Un bloc Lovelace prêt à coller pour un dashboard Bubble Card se trouve dans
-`~/perso/home-assistant/lovelace-micro-climat.yaml`.
+Un bloc Lovelace prêt à coller pour un dashboard Bubble Card est tenu à part, hors de ce
+dépôt : il décrit un dashboard particulier, pas le projet.
 
 **Notification d'anticipation.** L'automatisation HA `ouverture_fenetres_anticipee`
 (« Notification : ouvrir ou fermer les fenêtres bientôt ») prévient **30 minutes avant
@@ -269,8 +266,7 @@ Le sens du message suit le mode saisonnier, lu sur l'attribut `mode_saison` du c
 « Ouvrir pour faire entrer la chaleur… Fermer vers 18h30 » en saison froide, « l'extérieur
 repasse sous l'intérieur » en saison chaude. Faute d'attribut (les états disparaissent au
 redémarrage de HA, trente minutes au plus), le texte retombe sur la saison chaude, comme le
-projet. Rendu vérifié par `/api/template` sur les états réels le 23/09/2026 ; la version
-précédente est sauvegardée dans `~/perso/home-assistant/backup-2026-09-23/`.
+projet. Rendu vérifié par `/api/template` sur les états réels le 23/09/2026.
 
 Elle est le pendant *prédictif* des quatre automatisations « Rue plus froide/chaude que… »
 qui, elles, constatent la bascule au moment où elle arrive. Les deux se cumulent donc : à
@@ -284,8 +280,7 @@ du TODO).
 
 ## Sondes de santé
 
-Posées le 09/09/2026 ([P2-09](../audit-docker/plan/p2-09-healthchecks.md)) sur les **trois services
-web**. `docker ps` affiche désormais *(healthy)* à côté de leurs noms.
+Posées le 09/09/2026 sur les **trois services web**. `docker ps` affiche désormais *(healthy)* à côté de leurs noms.
 
 ```
 python3 -c "…urlopen('http://127.0.0.1:8000/openapi.json')"   toutes les 60 s, 3 échecs
