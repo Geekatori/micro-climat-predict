@@ -230,7 +230,9 @@ automatisation sans la dupliquer. Et l'entité d'ouverture porte `creneau_en_cou
 l'extérieur est **déjà** favorable, c'est-à-dire quand l'entité est à `unknown` non pas faute de
 conseil, mais parce que les fenêtres devraient déjà être ouvertes. Sans cet attribut les deux
 situations seraient indiscernables, et une automatisation qui teste `unknown` ne saurait pas
-laquelle elle regarde.
+laquelle elle regarde. « Déjà favorable » se juge sur l'intérieur **mesuré** (depuis le
+28/09/2026), pas sur la courbe simulée : celle-ci dérive de plusieurs degrés dans le passé,
+et le créneau en cours passait alors pour une ouverture toujours imminente.
 
 Publication toutes les 30 minutes par le planificateur, aux minutes 12 et 42, soit quatre
 minutes après chaque collecte. Déclenchement manuel :
@@ -255,12 +257,19 @@ complète, exposée sur `/api-meteo/forecast`.
 Un bloc Lovelace prêt à coller pour un dashboard Bubble Card est tenu à part, hors de ce
 dépôt : il décrit un dashboard particulier, pas le projet.
 
-**Notification d'anticipation.** L'automatisation HA `ouverture_fenetres_anticipee`
-(« Notification : ouvrir ou fermer les fenêtres bientôt ») prévient **30 minutes avant
-l'ouverture** conseillée et **15 minutes avant la fermeture**, à partir des deux capteurs
-d'horodatage. Chaque déclencheur est un template contenant `now()`, donc réévalué chaque minute,
-et qui ne se déclenche qu'au passage de faux à vrai : une seule notification par instant. Un
-identifiant de déclencheur (`ouverture` / `fermeture`) choisit le texte.
+**Notification d'anticipation.** Deux automatisations HA, `ouverture_fenetres_anticipee`
+(« Notification : ouvrir les fenêtres bientôt ») et `fermeture_fenetres_anticipee`
+(« … fermer les fenêtres bientôt »), préviennent **30 minutes avant l'ouverture** conseillée et
+**15 minutes avant la fermeture**, à partir des deux capteurs d'horodatage. Chaque déclencheur
+est un template contenant `now()`, donc réévalué chaque minute, et qui ne se déclenche qu'au
+passage de faux à vrai.
+
+Ce passage de faux à vrai ne suffit pas : l'heure prévue est republiée toutes les trente
+minutes et peut glisser d'un pas (11h10, puis 11h20, puis 11h10…). Chaque glissement qui la
+fait passer derrière `now()` puis revenir devant réarme le déclencheur. D'où un **anti-rebond
+de six heures** par automatisation (condition sur `this.attributes.last_triggered`), et deux
+automatisations plutôt qu'une, pour que la notification d'ouverture ne taise pas celle de
+fermeture. Posé le 28/09/2026 après seize notifications le 27/09.
 
 Le sens du message suit le mode saisonnier, lu sur l'attribut `mode_saison` du capteur :
 « Ouvrir pour faire entrer la chaleur… Fermer vers 18h30 » en saison froide, « l'extérieur
@@ -270,8 +279,7 @@ projet. Rendu vérifié par `/api/template` sur les états réels le 23/09/2026.
 
 Elle est le pendant *prédictif* des quatre automatisations « Rue plus froide/chaude que… »
 qui, elles, constatent la bascule au moment où elle arrive. Les deux se cumulent donc : à
-surveiller si le nombre de notifications devient gênant, d'autant que la fermeture en ajoute
-une par créneau.
+surveiller si le nombre de notifications redevient gênant.
 
 En plein hiver l'extérieur ne dépasse jamais l'intérieur : les capteurs restent alors inconnus
 des semaines durant, et l'automatisation muette avec eux. C'est le comportement attendu, pas une

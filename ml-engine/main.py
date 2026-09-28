@@ -811,8 +811,24 @@ def get_window_advice(df: pd.DataFrame, preds_std: np.ndarray, mode: str | None 
     # État courant, lu sur le dernier point connu du passé plutôt que déduit de
     # la première valeur du futur : un trou de collecte en fin d'historique ne
     # doit pas se lire comme « rien n'est favorable ».
+    #
+    # Et lu sur l'intérieur MESURÉ, pas sur la courbe simulée. Dans le passé la
+    # simulation dérive librement (2 à 3 °C sous la mesure fin septembre 2026),
+    # alors que le futur repart de la dernière mesure : comparer l'extérieur à
+    # la simulation passée disait « pas encore favorable » quand le premier pas
+    # futur l'était déjà. L'ouverture tombait alors toujours au pas suivant,
+    # republiée toutes les trente minutes, et HA notifiait à chaque fois : seize
+    # notifications le 27/09 pour un créneau qui était ouvert depuis le matin.
+    measured_int = pd.to_numeric(df["int_temp_min"], errors="coerce").to_numpy(dtype=float) \
+        if "int_temp_min" in df.columns else np.full(n, np.nan)
+    favorable_measured, known_measured = _favorable_series(ext_vals, measured_int, mode)
+    past_measured = np.where(known_measured & ~is_future)[0]
     past_known = np.where(known & ~is_future)[0]
-    favorable_now = bool(favorable[past_known[-1]]) if len(past_known) else False
+    fresh = len(past_measured) and (now - timestamps.iloc[past_measured[-1]]) <= timedelta(hours=1)
+    if fresh:
+        favorable_now = bool(favorable_measured[past_measured[-1]])
+    else:
+        favorable_now = bool(favorable[past_known[-1]]) if len(past_known) else False
 
     opening_idx = None
     if not favorable_now:
