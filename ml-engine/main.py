@@ -823,12 +823,18 @@ def get_window_advice(df: pd.DataFrame, preds_std: np.ndarray, mode: str | None 
         if "int_temp_min" in df.columns else np.full(n, np.nan)
     favorable_measured, known_measured = _favorable_series(ext_vals, measured_int, mode)
     past_measured = np.where(known_measured & ~is_future)[0]
-    past_known = np.where(known & ~is_future)[0]
+    #
+    # Sans mesure fraîche, on lit le premier pas futur, qui repart lui aussi de la
+    # dernière mesure, et jamais la simulation passée. Le 30/09/2026, le
+    # thermomètre du salon s'est tu à 22h33 : sa valeur figée a été effacée comme
+    # bloc constant, la lecture est retombée sur la simulation passée, 4 °C sous
+    # la réalité, et HA a annoncé une fermeture à 3h44 puis à 9h44.
+    future_known = np.where(known & is_future)[0]
     fresh = len(past_measured) and (now - timestamps.iloc[past_measured[-1]]) <= timedelta(hours=1)
     if fresh:
         favorable_now = bool(favorable_measured[past_measured[-1]])
     else:
-        favorable_now = bool(favorable[past_known[-1]]) if len(past_known) else False
+        favorable_now = bool(favorable[future_known[0]]) if len(future_known) else False
 
     opening_idx = None
     if not favorable_now:
