@@ -5,5 +5,6 @@ data/
 .env
 docker-compose.override.yml
 
-# Journal d'exploitation local, propre à l'installation
+# Journal d'exploitation et notes de développement local, propres à ce poste
 TODO.md
+LOCAL.md

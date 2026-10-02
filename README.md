@@ -164,15 +164,6 @@ exposent un indice de 1 à 6, pas une concentration en µg/m³.
 **Changement de code** : `docker compose config -q && docker compose up -d --build <service>`,
 sans `--pull`.
 
-**Test sous Docker Desktop / WSL2** : le réseau miroir ne joint pas le LAN.
-`scripts/wsl-ha-relay.py` relaie le TCP vers HA depuis l'hôte WSL, et `compose.wsl.yml` fait
-résoudre `HA_HOST` vers cet hôte. Le TLS traverse intact.
-
-```bash
-python3 scripts/wsl-ha-relay.py <ip-home-assistant>:8123 &
-docker compose -f docker-compose.yml -f compose.wsl.yml up -d
-```
-
 ## Licence
 
 AGPL-3.0, comme l'amont. Voir `LICENSE`.
