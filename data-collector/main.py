@@ -19,8 +19,7 @@ LON = float(os.getenv("LON", 3.0863))
 
 DB_PATH = "/app/data/metrics.db"
 
-# Entités Home Assistant, configurables par variables d'environnement.
-# Une variable vide désactive le capteur correspondant (ex. CO2_ENTITY= si pas de capteur CO2).
+# Entités Home Assistant, par variables d'environnement. Une variable vide désactive le capteur.
 _ENTITY_ENV = {
     "ext_temp": ("EXT_ENTITY", "sensor.exterieur_temperature"),
     "ext_hum": ("HUM_ENTITY", "sensor.exterieur_humidity"),
@@ -29,8 +28,8 @@ _ENTITY_ENV = {
     "cor_temp": ("HA_COR_TEMP", "sensor.temtop_c1plus_temtop_temperature"),
     "cor_hum": ("COR_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity"),
     "co2": ("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2"),
-    # Puissance de la prise mesurée du poêle à granulés, en W. Sert à repérer les
-    # périodes de chauffe, à masquer lors de l'ajustement du modèle hivernal.
+    # Puissance de la prise du poêle, en W : repère les périodes de chauffe à masquer
+    # lors de l'ajustement d'un futur modèle hivernal.
     "stove_power": ("STOVE_POWER_ENTITY", ""),
 }
 ENTITIES = {
@@ -243,13 +242,11 @@ async def run_collection(days: int = None):
                 df = pd.DataFrame(data, columns=["timestamp", key])
                 df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
                 if key == "stove_power":
-                    # La prise ne publie qu'aux changements : le signal est en marches, et
-                    # l'interpoler inventerait des rampes entre deux états. Chaque pas vaut le
-                    # max entre ses propres relevés (pics courts de l'allumage) et l'état hérité
-                    # du pas précédent, qui est son *dernier* relevé et non son max : sinon un
-                    # pic de cinq minutes serait prolongé jusqu'au changement suivant.
-                    # Un pas de plus en fin de série : le ffill global plus bas prolonge alors le
-                    # dernier relevé, et non le max du dernier pas.
+                    # La prise ne publie qu'aux changements : signal en marches, à ne pas
+                    # interpoler. Chaque pas vaut le max entre ses propres relevés (pics
+                    # d'allumage) et le dernier relevé du pas précédent (pas son max, sinon un
+                    # pic de cinq minutes serait prolongé). Un pas ajouté en fin de série pour
+                    # que le ffill global prolonge le dernier relevé et non le max du dernier pas.
                     steps = df.set_index("timestamp").resample("10min")
                     peaks = steps.max()
                     idx = pd.date_range(peaks.index[0], peaks.index[-1] + pd.Timedelta("10min"), freq="10min", name="timestamp")

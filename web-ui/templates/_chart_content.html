@@ -321,10 +321,9 @@
             : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
     }
 
-    // Le bandeau se montre dès qu'il y a QUELQUE CHOSE à dire : un pic extérieur,
-    // une ouverture, ou une simple fermeture. Auparavant il était conditionné au
-    // seul pic, lequel n'est publié que s'il tombe dans les six heures, donc nul
-    // la plupart du temps : le conseil d'ouverture restait invisible avec lui.
+    // Le bandeau se montre dès qu'il y a quelque chose à dire : pic extérieur,
+    // ouverture ou fermeture. Le pic seul n'est publié que dans les six heures,
+    // donc nul la plupart du temps.
     function updateAlertBanner(data) {
         const banner = document.getElementById('alert-banner');
         const msgEl = document.getElementById('alert-message');
@@ -346,8 +345,7 @@
             || (froid ? "Fenêtre favorable pour faire entrer la chaleur"
                       : "Fenêtre favorable pour évacuer la chaleur");
 
-        // Trois cas, dans l'ordre où ils servent : une bascule à venir, un créneau
-        // déjà commencé dont seule la fin reste à dire, ou rien d'actionnable.
+        // Bascule à venir, créneau déjà commencé (seule la fin reste à dire), ou rien.
         let label = null;
         if (opening && closing) {
             label = `Ouvrir ${opening} → fermer ${closing}`;
@@ -391,10 +389,7 @@
             }
         }
 
-        // Deux repères et non plus un seul : la fermeture compte autant que
-        // l'ouverture, et davantage en saison froide, où laisser ouvert après le
-        // croisement rend la chaleur qu'on venait de faire entrer. Ils sont
-        // décalés verticalement pour ne pas se chevaucher quand ils sont proches.
+        // Ouverture et fermeture, décalées verticalement pour ne pas se chevaucher.
         const marks = [
             { iso: data?.inversion_time, text: 'Ouverture', color: '#2563eb', border: '#3b82f6', offsetY: 25 },
             { iso: data?.closing_time, text: 'Fermeture', color: '#b45309', border: '#f59e0b', offsetY: 60 }

@@ -1,33 +1,36 @@
-# Fork de micro-climat-predict (jmfavreau, AGPL-3.0), adapté à une autre maison.
-# Différences avec l'amont : ports liés à 127.0.0.1 et hors plages courantes,
-# base SQLite en bind mount ./data
-# (sauvegardable), LAT/LON transmis au ml-engine, entités HA configurables via .env.
-#
-# Les quatre `net.unraid.docker.icon` ci-dessous prennent leur URL de `UNRAID_ICON_URL`
-# (dans le .env, vide par défaut : le label est alors sans effet). Ici un PNG servi par
-# un Homer local et non le CDN dashboard-icons : aucune des deux banques d'icônes n'a de météo
-# générique (vérifié le 10/09 — 4 220 et 7 621 icônes, seuls deux logos de marque
-# purement textuels). Unraid télécharge l'icône **côté serveur** (curl depuis le NAS,
-# `getIcon()` de DockerClient.php) puis la met en cache sous son propre domaine dans
-# /var/lib/docker/unraid/images/<conteneur>-icon.png : une URL en HTTP local ne pose
-# donc pas de problème de contenu mixte malgré l'interface Unraid en HTTPS, et Homer
-# n'est sollicité qu'au premier affichage. Corollaire à connaître : **changer cette
-# URL ne suffit pas**, il faut supprimer le cache du conteneur, sinon l'ancienne
-# icône reste affichée indéfiniment.
+# Fork de micro-climat-predict (jmfavreau, AGPL-3.0). Les différences avec l'amont
+# sont listées dans README.md.
+
+# Sonde commune aux trois services FastAPI. Les images python:3.11-slim n'ont ni curl
+# ni wget. `/openapi.json` prouve que uvicorn a chargé l'application avec ses routes.
+# Pas `/` : le collecteur et le moteur n'ont pas de route racine, et urlopen lève sur
+# un 404. Pas /api/status/* : ces routes lisent SQLite et clignoteraient pendant
+# l'entraînement.
+x-healthcheck: &healthcheck
+  test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
+  interval: 60s
+  timeout: 5s
+  retries: 3
+
+# `always` et non `unless-stopped` : sur Unraid, l'arrêt de l'array fait un `docker
+# stop` explicite, et un conteneur `unless-stopped` arrêté ainsi ne repart pas au boot
+# suivant. Le label d'icône Unraid est sans effet quand UNRAID_ICON_URL est vide.
+x-common: &common
+  restart: always
+  networks:
+    - meteo_network
+  labels:
+    net.unraid.docker.icon: "${UNRAID_ICON_URL:-}"
 
 services:
   data-collector:
+    <<: *common
     build: ./data-collector
-    # `always` et non `unless-stopped` : sur Unraid, l'arrêt de l'array fait un
-    # `docker stop` par conteneur, et un `unless-stopped` arrêté explicitement ne
-    # repart pas au démarrage suivant — donc plus de publication vers Home
-    # Assistant après un reboot, sans aucune erreur. Constat 1 de l'audit du 09/09.
-    restart: always
     container_name: mcp-data-collector
-    volumes:
-      - ./data:/app/data
     ports:
       - "127.0.0.1:${COLLECTOR_PORT:-8732}:8000"
+    volumes:
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
       - HA_URL=${HA_URL}
@@ -42,33 +45,12 @@ services:
       - COR_HUM_ENTITY=${COR_HUM_ENTITY}
       - CO2_ENTITY=${CO2_ENTITY:-}
       - STOVE_POWER_ENTITY=${STOVE_POWER_ENTITY:-}
-    # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
-    # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
-    # l'application avec ses routes — pas seulement qu'un socket est ouvert.
-    #
-    # Pourquoi PAS les routes /api/status/last-* , qui seraient plus parlantes : elles
-    # lisent la base SQLite. Un verrou pendant l'entrainement de 5h30 ferait clignoter
-    # la sonde, et une sonde qui crie faux apprend a ignorer le signal.
-    #
-    # Et pourquoi pas `/` : data-collector et ml-engine n'ont pas de route racine, ils
-    # repondent 404 — et urlopen leve sur un 404. La sonde les aurait declares malades
-    # POUR TOUJOURS. Mesure le 09/09 avant de poser quoi que ce soit.
-    # Constat 7 de l'audit du 09/09.
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-
-    labels:
-      net.unraid.docker.icon: "${UNRAID_ICON_URL:-}"
-    networks:
-      - meteo_network
+    healthcheck: *healthcheck
 
   ml-engine:
+    <<: *common
     build: ./ml-engine
     container_name: mcp-ml-engine
-    restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     ports:
       - "127.0.0.1:${ML_PORT:-8731}:8000"
     volumes:
@@ -77,41 +59,20 @@ services:
       - PYTHONUNBUFFERED=1
       - LAT=${LAT}
       - LON=${LON}
-      # Seuil « intérieur chaud » de la détection d'ouverture par le CO2, en °C.
-      # Vide ou absent vaut 23. Le mode saisonnier, lui, n'est PAS une variable
+      # Vide = valeur par défaut. Le mode saisonnier n'est pas une variable
       # d'environnement : il se règle depuis /admin et vit dans data/season.json.
       - INT_HOT_THRESHOLD_C=${INT_HOT_THRESHOLD_C:-}
-    # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
-    # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
-    # l'application avec ses routes — pas seulement qu'un socket est ouvert.
-    #
-    # Pourquoi PAS les routes /api/status/last-* , qui seraient plus parlantes : elles
-    # lisent la base SQLite. Un verrou pendant l'entrainement de 5h30 ferait clignoter
-    # la sonde, et une sonde qui crie faux apprend a ignorer le signal.
-    #
-    # Et pourquoi pas `/` : data-collector et ml-engine n'ont pas de route racine, ils
-    # repondent 404 — et urlopen leve sur un 404. La sonde les aurait declares malades
-    # POUR TOUJOURS. Mesure le 09/09 avant de poser quoi que ce soit.
-    # Constat 7 de l'audit du 09/09.
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-
-    labels:
-      net.unraid.docker.icon: "${UNRAID_ICON_URL:-}"
-    networks:
-      - meteo_network
+      - FAVORABLE_MARGIN_CHAUD=${FAVORABLE_MARGIN_CHAUD:-}
+      - FAVORABLE_MARGIN_FROID=${FAVORABLE_MARGIN_FROID:-}
+    healthcheck: *healthcheck
 
   web-ui:
+    <<: *common
     build: ./web-ui
     container_name: mcp-web-ui
-    restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     ports:
-      # WEB_BIND : 127.0.0.1 en local, adresse du serveur hôte pour
-      # rendre l'interface joignable depuis le LAN. Le moteur et le
-      # collecteur restent volontairement sur la boucle locale.
+      # WEB_BIND : 127.0.0.1 en local, adresse du serveur pour ouvrir l'interface au
+      # LAN. Le moteur et le collecteur restent sur la boucle locale.
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8730}:8000"
     volumes:
       - ./data:/app/data
@@ -127,51 +88,23 @@ services:
       - INT_HUM_ENTITY=${INT_HUM_ENTITY}
       - HA_COR_TEMP=${HA_COR_TEMP}
       - CO2_ENTITY=${CO2_ENTITY:-}
-      # Qualité de l'air : le web-ui interroge Open-Meteo directement, il lui faut
-      # donc les coordonnées comme au collecteur. Plus d'entités PM25/PM10 : aucune
-      # intégration HA d'ici ne donne de concentration en µg/m³ (cf. README).
+      # Qualité de l'air : le web-ui interroge Open-Meteo directement.
       - LAT=${LAT}
       - LON=${LON}
       - HA_SENSOR_PREFIX=${HA_SENSOR_PREFIX:-micro_climat}
       - HA_PUBLISH_HORIZON_HOURS=${HA_PUBLISH_HORIZON_HOURS:-6}
-    # Icône et bouton WebUI dans l'onglet Docker d'Unraid (constat 11). `[IP]` et
-    # `[PORT:8730]` sont des gabarits substitués par Unraid : ne pas les remplacer
-    # par une adresse en dur.
-    # Ces trois images sont python:3.11-slim : ni curl ni wget, mais python est la.
-    # `/openapi.json` est servi par FastAPI et prouve que uvicorn a charge
-    # l'application avec ses routes — pas seulement qu'un socket est ouvert.
-    #
-    # Pourquoi PAS les routes /api/status/last-* , qui seraient plus parlantes : elles
-    # lisent la base SQLite. Un verrou pendant l'entrainement de 5h30 ferait clignoter
-    # la sonde, et une sonde qui crie faux apprend a ignorer le signal.
-    #
-    # Et pourquoi pas `/` : data-collector et ml-engine n'ont pas de route racine, ils
-    # repondent 404 — et urlopen leve sur un 404. La sonde les aurait declares malades
-    # POUR TOUJOURS. Mesure le 09/09 avant de poser quoi que ce soit.
-    # Constat 7 de l'audit du 09/09.
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-
+    healthcheck: *healthcheck
     labels:
       net.unraid.docker.icon: "${UNRAID_ICON_URL:-}"
+      # `[IP]` et `[PORT:8730]` sont des gabarits substitués par Unraid.
       net.unraid.docker.webui: "http://[IP]:[PORT:8730]/"
-    networks:
-      - meteo_network
 
   cron:
-    # Image construite localement (voir scheduler/Dockerfile) et non `alpine:3.20` :
-    # 3.20 est en fin de vie depuis le 01/04/2026, et l'`apk add tzdata` qui etait
-    # dans la commande ci-dessous dependait du reseau AU BOOT du NAS. Son echec etait
-    # avale par un `|| true` et crond repartait en UTC, sans une ligne de log.
+    <<: *common
+    # Image construite localement : tzdata dans l'image, voir scheduler/Dockerfile.
     build: ./scheduler
-    restart: always   # voir data-collector ci-dessus (audit 09/09, constat 1)
     container_name: mcp-scheduler
     environment:
-      # TZ + tzdata (desormais dans l'image) : sans ca busybox crond raisonne en UTC
-      # et l'entrainement deriverait de deux heures en ete, d'une heure en hiver.
       - TZ=${TZ:-Europe/Paris}
     command: >
       /bin/sh -c "echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
@@ -179,10 +112,6 @@ services:
                   echo '30 5 * * * wget -qO- --post-data= http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
                   chmod 0600 /etc/crontabs/root &&
                   crond -f -d 8"
-    labels:
-      net.unraid.docker.icon: "${UNRAID_ICON_URL:-}"
-    networks:
-      - meteo_network
 
 networks:
   meteo_network:

@@ -1,20 +1,13 @@
 """Publication des prédictions dans Home Assistant.
 
-Écrit quatre capteurs via l'API REST de HA (``POST /api/states/<entity_id>``).
+Quatre capteurs écrits par ``POST /api/states/<entity_id>`` : rien à éditer dans
+``configuration.yaml``, aucun port à ouvrir. Contrepartie : un état écrit ainsi vit
+en mémoire dans HA (perdu au redémarrage, jusqu'à la publication suivante) et n'a
+pas d'identifiant unique (ni renommable, ni rattachable à une pièce). MQTT lèverait
+les deux.
 
-Pourquoi cette voie plutôt que des capteurs REST côté HA : rien à éditer dans
-``configuration.yaml`` (l'intégration ``rest`` n'existe qu'en YAML) et aucun port
-à ouvrir, puisque le trafic ne part que vers HA.
-
-Contrepartie assumée : un état créé ainsi vit en mémoire dans HA. Il disparaît à
-chaque redémarrage de HA et revient à la publication suivante, donc au pire
-trente minutes plus tard. Ces entités n'ont pas d'identifiant unique, elles ne
-sont donc ni renommables ni rattachables à une pièce depuis l'interface. Pour
-cela il faudra passer à MQTT.
-
-Les horodatages du moteur de prédiction sont en temps universel et naïfs. Ils
-sont convertis en ISO 8601 avec fuseau explicite, sans quoi HA les afficherait
-avec deux heures de décalage en été.
+Les horodatages du moteur sont en UTC naïf ; ils sont convertis en ISO 8601 avec
+fuseau explicite, sans quoi HA les afficherait décalés.
 """
 
 import os
@@ -126,10 +119,7 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
     mode = analysis.get("season_mode", "chaud")
     favorable_now = bool(analysis.get("favorable_now"))
 
-    # Le libellé dit le *pourquoi*, qui s'inverse avec la saison : ouvrir pour
-    # faire entrer la chaleur en automne, pour l'évacuer en été. Le nom d'entité,
-    # lui, ne bouge pas : le renommer casserait les automatisations et les cartes
-    # Lovelace qui le nomment.
+    # Le libellé suit la saison ; le nom d'entité ne bouge pas, les automatisations le nomment.
     but = "faire entrer la chaleur" if mode == "froid" else "évacuer la chaleur"
 
     horizon_val, horizon_dt = _value_at_horizon(points, now, HORIZON_HOURS)
@@ -145,9 +135,8 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
                 "icon": "mdi:window-open-variant",
                 "attribution": ATTRIBUTION,
                 "mode_saison": mode,
-                # Vrai quand l'extérieur est DÉJÀ favorable : il n'y a alors pas
-                # d'heure d'ouverture à annoncer, les fenêtres devraient l'être.
-                # C'est ce qui distingue « rien à faire » de « c'est maintenant ».
+                # Vrai quand l'extérieur est déjà favorable : distingue « rien à
+                # faire » de « c'est maintenant », les deux valant `unknown`.
                 "creneau_en_cours": favorable_now,
             },
         },

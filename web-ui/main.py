@@ -32,14 +32,10 @@ templates = Jinja2Templates(directory="templates")
 HA_URL = os.getenv("HA_URL", "http://supervisor/core/api")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 
-# Configuration des entités Home Assistant.
-# `docker-compose.yml` passe ces variables en `${VAR:-}` : absentes du `.env`, elles
-# arrivent dans le conteneur en chaîne vide, et `os.getenv` ne retombe alors *pas*
-# sur son défaut (il ne le fait que si la variable est non définie). D'où ce helper,
-# sans quoi une entité oubliée dans le `.env` se traduit par une requête vers
-# `/api/states/` et une valeur muette à l'écran.
+# Entités Home Assistant. Le compose passe ces variables en `${VAR:-}` : absentes du
+# `.env`, elles arrivent en chaîne vide, et `os.getenv` ne retombe pas sur son défaut.
 def env_entity(name: str, default: str) -> str:
-    """Return the entity id configured in `name`, treating empty as unset."""
+    """Entity id configured in `name`, treating empty as unset."""
     return (os.getenv(name) or "").strip() or default
 
 
@@ -49,15 +45,12 @@ INT_TEMP_MIN_ENTITY = env_entity("HA_INTERIOR_TEMP_MIN", "sensor.temperature_int
 INT_HUM_ENTITY = env_entity("INT_HUM_ENTITY", "sensor.temtop_c1plus_temtop_humidity")
 CO2_ENTITY = env_entity("CO2_ENTITY", "sensor.temtop_c1plus_temtop_co2")
 
-# Qualité de l'air : Open-Meteo et non Home Assistant. Aucune intégration HA de la
-# région ne remonte des concentrations en µg/m³ (celles qui existent donnent un indice
-# ATMO de 1 à 6), et l'API Open-Meteo ne demande pas de clé. Contre-partie assumée :
-# valeur modélisée CAMS sur la maille, pas la mesure d'une station. Voir le README.
+# Qualité de l'air : Open-Meteo, sans clé. Valeur modélisée CAMS sur la maille, pas une
+# mesure en station (les intégrations HA Atmo France donnent un indice, pas des µg/m³).
 LAT = float(os.getenv("LAT", 45.7797))
 LON = float(os.getenv("LON", 3.0863))
 AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
-# L'amont ne publie qu'un point par heure : recharger plus souvent ne donnerait
-# rien de neuf et cognerait une API gratuite à chaque rafraîchissement de la page.
+# Open-Meteo publie un point par heure : inutile d'interroger à chaque chargement de page.
 AIR_QUALITY_TTL = timedelta(minutes=15)
 _air_quality_cache: dict = {}
 
@@ -68,6 +61,12 @@ ENTITIES = {
 }
 
 DB_PATH = "/app/data/metrics.db"
+# Les trois fichiers produits par /api/train du ml-engine, supprimés par le reset total.
+MODEL_PATHS = [
+    "/app/data/model_ext.joblib",
+    "/app/data/model_int_gb.joblib",
+    "/app/data/model_int_std.joblib",
+]
 COLLECTOR_URL = os.getenv("COLLECTOR_URL", "http://data-collector:8000")
 ML_ENGINE_URL = os.getenv("ML_ENGINE_URL", "http://ml-engine:8000")
 
@@ -160,9 +159,7 @@ async def fetch_weather_data() -> dict:
                     print(f"HA {entities[key]} ({key}) injoignable : {resp}")
                     continue
                 if resp.status_code != 200:
-                    # 404 = l'entité n'existe pas dans HA (intégration absente,
-                    # capteur renommé). Sans cette trace, la page affiche juste
-                    # `--` et la panne passe inaperçue.
+                    # 404 : entité absente de HA (intégration manquante, capteur renommé).
                     print(f"HA {entities[key]} ({key}) : HTTP {resp.status_code}")
                     continue
                 data = resp.json()
@@ -215,8 +212,8 @@ async def fetch_air_quality() -> dict:
         print(f"Open-Meteo qualité de l'air injoignable : {e}")
         return result
 
-    # On ne mémorise qu'une réponse exploitable : sinon un incident passager
-    # figerait des tirets sur la page pour tout le TTL.
+    # Seule une réponse exploitable est mémorisée : un incident passager ne doit pas
+    # figer des tirets pour tout le TTL.
     if result["pm25"] is not None or result["pm10"] is not None:
         _air_quality_cache["current"] = {"fetched_at": now, "data": result}
     return result
@@ -300,11 +297,7 @@ async def admin_dashboard(request: Request):
     return templates.TemplateResponse(request, "admin.html", context)
 
 async def fetch_season_mode() -> str:
-    """Mode saisonnier courant, lu auprès du moteur de prédiction.
-
-    Le moteur en est seul dépositaire : c'est lui qui s'en sert, et un unique
-    écrivain évite d'avoir à se demander qui a raison quand les deux divergent.
-    """
+    """Mode saisonnier courant. Le moteur en est seul dépositaire."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{ML_ENGINE_URL}/api/season")
@@ -364,11 +357,7 @@ async def trigger_clear():
             os.remove(DB_PATH)
             print("Database successfully cleared.")
 
-        model_paths = [
-            "/app/data/model_ext.joblib",
-            "/app/data/model_int.joblib"
-        ]
-        for path in model_paths:
+        for path in MODEL_PATHS:
             if os.path.exists(path):
                 os.remove(path)
                 print(f"Removed model file: {path}")
@@ -581,8 +570,7 @@ async def get_forecast(ml: str = "forecast"):
 
 @app.get("/api/publish-ha")
 async def api_publish_ha():
-    """Écrit les prédictions dans Home Assistant. Appelé par le planificateur
-    quelques minutes après chaque collecte. Voir ha_publish.py."""
+    """Écrit les prédictions dans Home Assistant (planificateur, après chaque collecte)."""
     result = await publish_predictions()
     print(f"[{datetime.now()}] publication HA : {result}")
     return result
@@ -623,7 +611,7 @@ async def get_analysis():
 
 @app.get("/api/backfill-co2")
 async def backfill_co2(days: int = 30):
-    co2_entity = "sensor.temtop_c1plus_temtop_co2"
+    co2_entity = CO2_ENTITY
 
     if not os.path.exists(DB_PATH):
         return {"status": "error", "message": "Database not found."}
