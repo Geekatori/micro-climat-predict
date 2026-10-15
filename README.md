@@ -56,6 +56,7 @@ défaut du code.
 | `FAVORABLE_MARGIN_CHAUD`, `FAVORABLE_MARGIN_FROID` | hystérésis du conseil d'aération (0,5 et 0,3 °C) |
 | `HA_SENSOR_PREFIX`, `HA_PUBLISH_HORIZON_HOURS` | capteurs publiés dans HA (`micro_climat`, 6 h) |
 | `WEB_BIND`, `WEB_PORT`, `ML_PORT`, `COLLECTOR_PORT`, `TZ` | réseau, fuseau du planificateur |
+| `ALLOW_RESET` | `1` autorise le reset total de `/admin` ; absent ou `0` (défaut), la route répond 403 |
 | `UNRAID_ICON_URL` | icône de l'onglet Docker d'Unraid, vide ailleurs |
 
 ## Différences avec l'amont
@@ -87,7 +88,10 @@ défaut du code.
   le collecteur et le moteur n'ont pas de route racine. Pas `/api/status/*` : ces routes
   lisent SQLite et clignoteraient pendant l'entraînement.
 - **Reset total** : supprime les trois fichiers de modèle réellement produits. L'amont ne
-  supprimait que `model_int.joblib`, qui n'existe pas.
+  supprimait que `model_int.joblib`, qui n'existe pas. Il est désactivé sauf `ALLOW_RESET=1`
+  et demande de saisir `SUPPRIMER`, voir [Exploitation](#exploitation).
+- **Déclencheurs en POST** : `/trigger-*` et `/api/backfill-co2` étaient des GET, qu'un lien
+  préchargé ou une balise `<img>` suffisait à lancer.
 - **Pannes visibles** : le web-ui journalise chaque entité HA injoignable ou non numérique au
   lieu d'afficher `--` sans trace.
 
@@ -163,6 +167,14 @@ exposent un indice de 1 à 6, pas une concentration en µg/m³.
 **Image de base** : `docker compose build --pull && docker compose up -d`.
 **Changement de code** : `docker compose config -q && docker compose up -d --build <service>`,
 sans `--pull`.
+
+**Déclencheurs de l'interface** (09/10/2026) : `/trigger-season`, `/trigger-collect`,
+`/trigger-train`, `/trigger-clear-cache`, `/trigger-clear` et `/api/backfill-co2` n'acceptent
+plus que `POST` (un GET répond 405). Les boutons de `/admin` sont des formulaires. À la main :
+`curl -X POST "http://127.0.0.1:8730/trigger-collect?days=9"`. Le reset total
+(`/trigger-clear`, base et modèles) répond 403 tant que `ALLOW_RESET=1` n'est pas dans
+l'environnement du web-ui ; autorisé, il exige le champ `confirm=SUPPRIMER`, que `/admin` fait
+saisir. Remettre `ALLOW_RESET=0` après usage.
 
 ## Licence
 

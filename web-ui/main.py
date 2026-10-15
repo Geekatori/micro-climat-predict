@@ -6,10 +6,11 @@ import httpx
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import asyncio
 from pathlib import Path
+from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
 from ha_publish import publish_predictions
@@ -67,6 +68,11 @@ MODEL_PATHS = [
     "/app/data/model_int_gb.joblib",
     "/app/data/model_int_std.joblib",
 ]
+# Reset total : désactivé sauf si ALLOW_RESET=1. La base est la seule archive longue
+# (l'enregistreur HA purge en une dizaine de jours), et /admin n'a pas d'authentification.
+ALLOW_RESET = (os.getenv("ALLOW_RESET") or "").strip() == "1"
+# Mot que la page /admin fait saisir avant d'envoyer le reset, vérifié ici aussi.
+RESET_CONFIRM_WORD = "SUPPRIMER"
 COLLECTOR_URL = os.getenv("COLLECTOR_URL", "http://data-collector:8000")
 ML_ENGINE_URL = os.getenv("ML_ENGINE_URL", "http://ml-engine:8000")
 
@@ -263,6 +269,8 @@ async def admin_dashboard(request: Request):
         "active_page": "admin",
         "db_exists": db_exists,
         "season_mode": await fetch_season_mode(),
+        "allow_reset": ALLOW_RESET,
+        "reset_confirm_word": RESET_CONFIRM_WORD,
         "total_rows": 0,
         "start_date": "N/A",
         "end_date": "N/A",
@@ -308,7 +316,10 @@ async def fetch_season_mode() -> str:
     return "chaud"
 
 
-@app.get("/trigger-season")
+# Les déclencheurs sont en POST : un GET (lien préchargé, balise <img> d'une page visitée
+# depuis le LAN) ne doit rien lancer. Les formulaires de /admin envoient le POST, la
+# réponse 303 ramène le navigateur sur /admin en GET.
+@app.post("/trigger-season")
 async def trigger_season(mode: str = "chaud"):
     """Bascule saison chaude / saison froide depuis la page d'administration."""
     try:
@@ -322,7 +333,7 @@ async def trigger_season(mode: str = "chaud"):
     return RedirectResponse(url="/admin", status_code=303)
 
 
-@app.get("/trigger-collect")
+@app.post("/trigger-collect")
 async def trigger_collect(days: int = 9):
     try:
         async with httpx.AsyncClient() as client:
@@ -342,7 +353,7 @@ async def background_train_request():
     except Exception as e:
         print(f"Failed to trigger background training: {e}")
 
-@app.get("/trigger-train")
+@app.post("/trigger-train")
 async def trigger_train(background_tasks: BackgroundTasks):
     # Ajoute la tâche à la file d'attente d'arrière-plan de FastAPI
     background_tasks.add_task(background_train_request)
@@ -350,8 +361,21 @@ async def trigger_train(background_tasks: BackgroundTasks):
     # Redirige l'utilisateur INSTANTANÉMENT, sans attendre la fin du calcul
     return RedirectResponse(url="/admin", status_code=303)
 
-@app.get("/trigger-clear")
-async def trigger_clear():
+@app.post("/trigger-clear")
+async def trigger_clear(request: Request):
+    """Supprime la base et les modèles. Exige ALLOW_RESET=1 et le mot de confirmation."""
+    if not ALLOW_RESET:
+        return PlainTextResponse(
+            "Reset total désactivé : ajouter ALLOW_RESET=1 au .env et à l'environnement du web-ui, puis recréer le conteneur.",
+            status_code=403,
+        )
+    # Formulaire urlencodé lu à la main : Form() exigerait python-multipart.
+    body = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    if body.get("confirm", [""])[0].strip() != RESET_CONFIRM_WORD:
+        return PlainTextResponse(
+            f"Reset total refusé : confirmation absente ou erronée (saisir {RESET_CONFIRM_WORD} depuis /admin).",
+            status_code=400,
+        )
     try:
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
@@ -609,7 +633,7 @@ async def get_analysis():
     }
 
 
-@app.get("/api/backfill-co2")
+@app.post("/api/backfill-co2")
 async def backfill_co2(days: int = 30):
     co2_entity = CO2_ENTITY
 
@@ -693,7 +717,7 @@ async def proxy_last_training():
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"ML Engine unavailable: {e}")
 
-@app.get("/trigger-clear-cache")
+@app.post("/trigger-clear-cache")
 async def trigger_clear_cache():
     """Trigger cache clearing across data-collector and ml-engine."""
     async with httpx.AsyncClient(timeout=5.0) as client:
