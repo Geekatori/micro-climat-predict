@@ -631,7 +631,8 @@ def record_publication(result: dict) -> None:
         print(f"Trace de publication impossible : {exc}")
 
 
-@app.get("/api/publish-ha")
+# POST : la route écrit dans HA, un lien préchargé ou une balise <img> ne doit pas suffire.
+@app.post("/api/publish-ha")
 async def api_publish_ha():
     """Écrit les prédictions dans Home Assistant (planificateur, après chaque collecte)."""
     result = await publish_predictions()

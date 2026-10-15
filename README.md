@@ -124,7 +124,7 @@ installation, la branche froide n'a jamais tourné sur des données réelles.
 ## Publication dans Home Assistant
 
 Le web-ui pousse quatre capteurs par `POST /api/states/<entity_id>`, toutes les 30 minutes
-ou à la main par `GET /api/publish-ha`. Rien à ajouter dans `configuration.yaml`, aucun
+ou à la main par `POST /api/publish-ha` (un GET répond 405 depuis le 09/10/2026). Rien à ajouter dans `configuration.yaml`, aucun
 port à ouvrir : le trafic ne part que vers HA.
 
 | Entité | Contenu |
@@ -172,15 +172,18 @@ sans `--pull`.
 
 **Déclencheurs de l'interface** (09/10/2026) : `/trigger-season`, `/trigger-collect`,
 `/trigger-train`, `/trigger-clear-cache`, `/trigger-clear` et `/api/backfill-co2` n'acceptent
-plus que `POST` (un GET répond 405). Les boutons de `/admin` sont des formulaires. À la main :
+plus que `POST` (un GET répond 405), comme `/api/publish-ha` (même jour ; le
+planificateur l'appelle par `wget --post-data=`). Les boutons de `/admin` sont des formulaires. À la main :
 `curl -X POST "http://127.0.0.1:8730/trigger-collect?days=9"`. Le reset total
 (`/trigger-clear`, base et modèles) répond 403 tant que `ALLOW_RESET=1` n'est pas dans
 l'environnement du web-ui ; autorisé, il exige le champ `confirm=SUPPRIMER`, que `/admin` fait
 saisir. Remettre `ALLOW_RESET=0` après usage.
 
-**Collecte en échec** (09/10/2026) : quand HA ne fournit aucun point (éteint, jeton révoqué,
-capteurs tous non numériques), `/api/collect` répond 502 et note `error` dans
-`collection_logs`, cause comprise. La météo est enregistrée quand même. Le `wget` du
+**Collecte en échec** (09/10/2026) : quand HA ne fournit pas de réponse exploitable (éteint,
+jeton révoqué, réponse illisible même en partie) ou aucun point pour l'extérieur ou pour
+tous les capteurs intérieurs, `/api/collect` répond 502 et note `error` dans
+`collection_logs`, cause comprise. Un capteur secondaire muet (humidité, CO₂, poêle) est
+seulement cité dans le message de la collecte réussie. La météo est enregistrée quand même. Le `wget` du
 planificateur échoue donc, et une ligne crontab qui enchaîne un ping par `&&` envoie `/fail`
 au lieu d'un battement vert. Une collecte réussie note le nombre de points HA reçus.
 

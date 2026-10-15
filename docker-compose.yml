@@ -110,7 +110,7 @@ services:
       - TZ=${TZ:-Europe/Paris}
     command: >
       /bin/sh -c "echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
-                  echo '12,42 * * * * wget -qO- http://web-ui:8000/api/publish-ha' >> /etc/crontabs/root &&
+                  echo '12,42 * * * * wget -qO- --post-data= http://web-ui:8000/api/publish-ha' >> /etc/crontabs/root &&
                   echo '30 5 * * * wget -qO- --post-data= http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
                   chmod 0600 /etc/crontabs/root &&
                   crond -f -d 8"
