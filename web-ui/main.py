@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.templating import Jinja2Templates
 import asyncio
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
 from ha_publish import publish_predictions
@@ -30,6 +30,70 @@ def clean_for_json(data):
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory="templates")
+
+# Garde d'origine des requêtes qui modifient (POST et apparentés). Passer les
+# déclencheurs en POST ne suffit pas : une page tierce ouverte sur le LAN peut encore
+# poster un formulaire simple vers l'interface, qui n'a pas d'authentification. Le
+# navigateur joint alors un en-tête Origin (ou au moins Referer) : s'il désigne un
+# autre hôte que celui de la requête, refus en 403. Sans aucun des deux (planificateur,
+# curl), la requête passe. ALLOWED_ORIGINS, facultatif : origines supplémentaires
+# admises, séparées par des virgules (un nom derrière un proxy, par exemple).
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _netloc(value: str, scheme: str = "") -> str:
+    """« hôte:port » en minuscules, sans le port par défaut du schéma."""
+    value = value.strip().lower()
+    if "://" in value:
+        parts = urlsplit(value)
+        scheme, value = parts.scheme, parts.netloc
+    host, sep, port = value.rpartition(":")
+    if sep and "]" not in port and port == _DEFAULT_PORTS.get(scheme):
+        return host
+    return value
+
+
+ALLOWED_ORIGINS = {
+    _netloc(o, "http") for o in (os.getenv("ALLOWED_ORIGINS") or "").split(",") if o.strip()
+}
+
+
+def foreign_origin(headers: dict) -> str | None:
+    """Origine refusée de la requête, ou None si elle est absente ou admise."""
+    source = headers.get("origin") or headers.get("referer")
+    if not source:
+        return None
+    parts = urlsplit(source.strip())
+    origin = _netloc(parts.netloc, parts.scheme) if parts.netloc else ""
+    host = _netloc(headers.get("host", ""), parts.scheme)
+    if origin and (origin == host or origin in ALLOWED_ORIGINS):
+        return None
+    return source.strip()[:200]
+
+
+class OriginGuard:
+    """Middleware ASGI : 403 sur une méthode non sûre venue d'une autre origine."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] in UNSAFE_METHODS:
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+            refused = foreign_origin(headers)
+            if refused:
+                print(f"Requête {scope['method']} {scope['path']} refusée, origine : {refused}")
+                response = PlainTextResponse(
+                    "Origine refusée : cette action ne se déclenche que depuis l'interface elle-même.",
+                    status_code=403,
+                )
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(OriginGuard)
 
 HA_URL = os.getenv("HA_URL", "http://supervisor/core/api")
 HA_TOKEN = os.getenv("HA_TOKEN", "")

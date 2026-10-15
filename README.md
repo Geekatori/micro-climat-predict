@@ -179,6 +179,13 @@ planificateur l'appelle par `wget --post-data=`). Les boutons de `/admin` sont d
 l'environnement du web-ui ; autorisé, il exige le champ `confirm=SUPPRIMER`, que `/admin` fait
 saisir. Remettre `ALLOW_RESET=0` après usage.
 
+**Garde d'origine** (09/10/2026) : le POST seul ne suffit pas, une page tierce ouverte sur le
+LAN peut poster un formulaire simple vers l'interface. Toute requête POST, PUT, PATCH ou
+DELETE dont l'en-tête `Origin` (à défaut `Referer`) désigne un autre `hôte:port` que l'en-tête
+`Host` reçoit 403. Sans aucun des deux (planificateur, `curl`), elle passe. `ALLOWED_ORIGINS`
+(facultatif, séparées par des virgules) admet d'autres origines, par exemple un nom servi par
+un proxy.
+
 **Collecte en échec** (09/10/2026) : quand HA ne fournit pas de réponse exploitable (éteint,
 jeton révoqué, réponse illisible même en partie) ou aucun point pour l'extérieur ou pour
 tous les capteurs intérieurs, `/api/collect` répond 502 et note `error` dans

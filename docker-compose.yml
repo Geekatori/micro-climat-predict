@@ -95,6 +95,8 @@ services:
       - HA_PUBLISH_HORIZON_HOURS=${HA_PUBLISH_HORIZON_HOURS:-6}
       # Reset total de /admin (base et modèles) : refusé sauf si ALLOW_RESET=1.
       - ALLOW_RESET=${ALLOW_RESET:-0}
+      # Origines admises en plus de l'hôte de la requête pour les POST (garde d'origine).
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     healthcheck: *healthcheck
     labels:
       net.unraid.docker.icon: "${UNRAID_ICON_URL:-}"
