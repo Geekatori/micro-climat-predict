@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 import math
 import os
 import sqlite3
@@ -6,7 +7,7 @@ import httpx
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import asyncio
 from pathlib import Path
@@ -592,12 +593,109 @@ async def get_forecast(ml: str = "forecast"):
     return {"series": series_data, "_debug_errors": errors}
 
 
+# Trace de la dernière publication HA, lue par /health/fraicheur. Un fichier plutôt
+# qu'une table : la publication ne touche pas la base.
+PUBLISH_STATE_PATH = "/app/data/publication_ha.json"
+
+# Âge maximal toléré, tiré du planificateur. Collecte (8 et 38) et publication (12 et
+# 42) tournent toutes les 30 min : un passage manqué laisse 60 min entre deux réussites,
+# 75 min le tolèrent (HA qui redémarre) et signalent le deuxième d'affilée. Entraînement
+# quotidien à 5 h 30 : 26 h couvrent le jour de 25 h du changement d'heure et signalent
+# un passage manqué vers 7 h 30.
+FRESHNESS_LIMITS = {
+    "collecte": timedelta(minutes=75),
+    "publication": timedelta(minutes=75),
+    "entrainement": timedelta(hours=26),
+}
+
+
+def record_publication(result: dict) -> None:
+    """Note l'essai de publication, et l'heure de la dernière réussite complète."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    state = {}
+    try:
+        with open(PUBLISH_STATE_PATH, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        pass
+    state["dernier_essai"] = now
+    state["dernier_statut"] = result.get("status")
+    if result.get("status") == "success":
+        state["derniere_reussite"] = now
+    try:
+        tmp = f"{PUBLISH_STATE_PATH}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        os.replace(tmp, PUBLISH_STATE_PATH)
+    except OSError as exc:
+        print(f"Trace de publication impossible : {exc}")
+
+
 @app.get("/api/publish-ha")
 async def api_publish_ha():
     """Écrit les prédictions dans Home Assistant (planificateur, après chaque collecte)."""
     result = await publish_predictions()
     print(f"[{datetime.now()}] publication HA : {result}")
+    record_publication(result)
     return result
+
+
+def _last_success(table: str) -> str | None:
+    """Horodatage UTC naïf de la dernière ligne `success` d'une table de journal."""
+    # Lecture seule, avec attente : l'entraînement de 5 h 30 verrouille la base un moment.
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=15)
+    try:
+        row = conn.execute(
+            f"SELECT MAX(timestamp) FROM {table} WHERE status = 'success'"
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+@app.get("/health/fraicheur")
+def health_freshness():
+    """200 si collecte, entraînement et publication HA ont réussi récemment, 503 sinon.
+
+    Sondé par Gatus. Healthchecks ne voit que la collecte ; publication et entraînement
+    peuvent échouer des jours sans autre trace que les journaux.
+    """
+    now = datetime.now(timezone.utc)
+    last: dict[str, str | None] = {}
+    errors: dict[str, str] = {}
+
+    for name, table in (("collecte", "collection_logs"), ("entrainement", "training_logs")):
+        try:
+            last[name] = _last_success(table)
+        except sqlite3.Error as exc:
+            last[name] = None
+            errors[name] = f"base illisible : {exc}"
+
+    try:
+        with open(PUBLISH_STATE_PATH, encoding="utf-8") as fh:
+            last["publication"] = json.load(fh).get("derniere_reussite")
+    except (OSError, ValueError) as exc:
+        last["publication"] = None
+        errors["publication"] = f"aucune trace : {type(exc).__name__}"
+
+    checks = {}
+    for name, limit in FRESHNESS_LIMITS.items():
+        check = {"derniere_reussite": last.get(name), "seuil_minutes": int(limit.total_seconds() // 60)}
+        try:
+            when = datetime.strptime(last[name], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            age = now - when
+            check["age_minutes"] = int(age.total_seconds() // 60)
+            check["ok"] = age <= limit
+        except (TypeError, ValueError):
+            check["ok"] = False
+            check["erreur"] = errors.get(name, "jamais réussie")
+        checks[name] = check
+
+    fresh = all(c["ok"] for c in checks.values())
+    return JSONResponse(
+        status_code=200 if fresh else 503,
+        content={"status": "ok" if fresh else "perime", **checks},
+    )
 
 
 @app.get("/api-meteo/analysis")

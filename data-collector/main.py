@@ -5,6 +5,7 @@ import sqlite3
 from dotenv import load_dotenv
 import httpx
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import pandas as pd
 import asyncio
 
@@ -160,6 +161,8 @@ async def fetch_weather_data_days(days: int):
 
         ha_data_dict = {key: [] for key in ENTITIES.keys()}
         entities_filter = ",".join(ENTITIES.values())
+        # Cause d'une réponse HA inexploitable, remontée par /api/collect quand aucun point n'arrive.
+        ha_status = "sans réponse"
 
         try:
             # no_attributes : on ne garde que state/last_updated, la réponse est 10x plus légère.
@@ -169,7 +172,9 @@ async def fetch_weather_data_days(days: int):
                 headers=ha_headers, timeout=120.0,
             )
             print(f"[{datetime.now()}] HA history HTTP {ha_resp.status_code}")
+            ha_status = f"HTTP {ha_resp.status_code}"
             if ha_resp.status_code == 200:
+                ha_status = "HTTP 200 sans valeur numérique"  # lu seulement si aucun point
                 for entity_history in ha_resp.json():
                     if not entity_history: continue
                     key = next((k for k, v in ENTITIES.items() if v == entity_history[0].get("entity_id")), None)
@@ -180,7 +185,9 @@ async def fetch_weather_data_days(days: int):
                                 val = float(state["state"])
                                 if not math.isnan(val) and not math.isinf(val): ha_data_dict[key].append([dt, val])
                             except: continue
-        except Exception as e: print(f"HA Error: {type(e).__name__}: {e}")
+        except Exception as e:
+            ha_status = f"injoignable ({type(e).__name__})"
+            print(f"HA Error: {type(e).__name__}: {e}")
         print(f"[{datetime.now()}] HA points par capteur : { {k: len(v) for k, v in ha_data_dict.items()} }")
 
         meteo_past_points = []
@@ -222,7 +229,7 @@ async def fetch_weather_data_days(days: int):
 
         print(f"[{datetime.now()}] Final summary -> meteo_past_points: {len(meteo_past_points)} | meteo_future_points: {len(meteo_future_points)}")
 
-        return ha_data_dict, meteo_past_points, meteo_future_points
+        return ha_data_dict, meteo_past_points, meteo_future_points, ha_status
 
 @app.get("/api/collect")
 async def run_collection(days: int = None):
@@ -233,7 +240,8 @@ async def run_collection(days: int = None):
 
     try:
         print(f"[{datetime.now()}] Starting collection for the last {days_to_fetch} days...")
-        ha_data, meteo_past_points, meteo_future_points = await fetch_weather_data_days(days=days_to_fetch)
+        ha_data, meteo_past_points, meteo_future_points, ha_status = await fetch_weather_data_days(days=days_to_fetch)
+        ha_points = sum(len(points) for points in ha_data.values())
 
         # 1. Process Past Data (Metrics)
         dfs_past = []
@@ -339,17 +347,34 @@ async def run_collection(days: int = None):
             conn.commit()
             conn.close()
 
+        rows_processed = len(dfs_past[0]) if dfs_past else 0
+
+        # HA éteint, jeton révoqué ou capteurs tous non numériques : la météo a été
+        # enregistrée, mais la collecte n'a pas réussi. 502 pour que le `wget` du
+        # planificateur échoue et que Healthchecks reçoive `/fail`, au lieu d'un
+        # `success` qui laissait le check vert (panne de 4 h du 04/09).
+        if ENTITIES and ha_points == 0:
+            status, message = "error", f"Home Assistant n'a fourni aucun point ({ha_status})"
+        else:
+            status, message = "success", f"Collection completed successfully (HA : {ha_points} points)"
+
         conn = sqlite3.connect(DB_PATH)
         conn.execute("""
             INSERT INTO collection_logs (timestamp, days_fetched, rows_processed, status, message)
             VALUES (?, ?, ?, ?, ?)
-        """, (now_str, days_to_fetch, len(dfs_past[0]) if dfs_past else 0, "success", "Collection completed successfully"))
+        """, (now_str, days_to_fetch, rows_processed, status, message))
         conn.commit()
         conn.close()
 
         clear_db_cache()
 
-        return {"status": "success", "rows_processed": len(dfs_past[0]) if dfs_past else 0}
+        if status != "success":
+            print(f"[{datetime.now()}] Collecte en échec : {message}")
+            return JSONResponse(
+                status_code=502,
+                content={"status": status, "message": message, "rows_processed": rows_processed},
+            )
+        return {"status": "success", "rows_processed": rows_processed, "ha_points": ha_points}
 
     except Exception as e:
         try:

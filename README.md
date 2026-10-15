@@ -94,6 +94,8 @@ défaut du code.
   préchargé ou une balise `<img>` suffisait à lancer.
 - **Pannes visibles** : le web-ui journalise chaque entité HA injoignable ou non numérique au
   lieu d'afficher `--` sans trace.
+- **Collecte en échec quand HA ne fournit rien** : `/api/collect` répond 502 et journalise
+  `error`, voir [Exploitation](#exploitation).
 
 ## Mode saisonnier
 
@@ -175,6 +177,20 @@ plus que `POST` (un GET répond 405). Les boutons de `/admin` sont des formulair
 (`/trigger-clear`, base et modèles) répond 403 tant que `ALLOW_RESET=1` n'est pas dans
 l'environnement du web-ui ; autorisé, il exige le champ `confirm=SUPPRIMER`, que `/admin` fait
 saisir. Remettre `ALLOW_RESET=0` après usage.
+
+**Collecte en échec** (09/10/2026) : quand HA ne fournit aucun point (éteint, jeton révoqué,
+capteurs tous non numériques), `/api/collect` répond 502 et note `error` dans
+`collection_logs`, cause comprise. La météo est enregistrée quand même. Le `wget` du
+planificateur échoue donc, et une ligne crontab qui enchaîne un ping par `&&` envoie `/fail`
+au lieu d'un battement vert. Une collecte réussie note le nombre de points HA reçus.
+
+**Fraîcheur** (09/10/2026) : `GET /health/fraicheur` sur le web-ui répond 200 si la dernière
+collecte et la dernière publication HA réussies ont moins de 75 min (rythme de 30 min : un
+passage manqué est toléré, le deuxième signalé) et le dernier entraînement réussi moins de
+26 h (quotidien à 5 h 30, jour de 25 h du changement d'heure compris), 503 sinon, avec le
+détail en JSON. La publication note ses essais
+dans `data/publication_ha.json` ; avant la première publication, la route répond 503. Une
+sonde externe (Gatus) la consulte.
 
 ## Licence
 
