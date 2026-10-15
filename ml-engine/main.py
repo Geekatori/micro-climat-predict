@@ -730,8 +730,16 @@ FAVORABLE_MARGIN = {
 # de dix minutes : six pas valent une heure, de quoi écarter les creux passagers.
 REQUIRED_CONSECUTIVE_STEPS = 6
 
+# Saison froide : hauteur minimale du soleil, en degrés, à l'heure d'ouverture.
+# On ouvre pour faire entrer un air réchauffé par le soleil ; soleil bas ou
+# couché, l'extérieur baisse et un « croisement » prévu ne vient que des dérives
+# des deux simulations (ouvertures annoncées à 20 h ou 22 h en octobre 2026).
+# À 10°, les vrais créneaux mesurés de fin septembre et d'octobre sont gardés.
+SUN_MIN_ELEVATION_FROID = float(os.getenv("SUN_MIN_ELEVATION_FROID") or 10.0)
 
-def _favorable_series(ext_vals: np.ndarray, preds_std: np.ndarray, mode: str) -> tuple[np.ndarray, np.ndarray]:
+
+def _favorable_series(ext_vals: np.ndarray, preds_std: np.ndarray, mode: str,
+                      margin: float | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Renvoie (favorable, connu).
 
     Seul endroit où les deux saisons diffèrent : en saison chaude l'extérieur doit
@@ -739,7 +747,8 @@ def _favorable_series(ext_vals: np.ndarray, preds_std: np.ndarray, mode: str) ->
     des deux courbes manque, pour ne pas prendre un trou de données pour une bascule.
     """
     known = ~(np.isnan(ext_vals) | np.isnan(preds_std))
-    margin = FAVORABLE_MARGIN.get(mode, FAVORABLE_MARGIN["chaud"])
+    if margin is None:
+        margin = FAVORABLE_MARGIN.get(mode, FAVORABLE_MARGIN["chaud"])
 
     with np.errstate(invalid="ignore"):
         if mode == "froid":
@@ -791,14 +800,27 @@ def get_window_advice(df: pd.DataFrame, preds_std: np.ndarray, mode: str | None 
     future_known = np.where(known & is_future)[0]
     fresh = len(past_measured) > 0 and now - timestamps.iloc[past_measured[-1]] <= timedelta(hours=1)
     if fresh:
-        favorable_now = bool(favorable_measured[past_measured[-1]])
+        last = past_measured[-1]
+        favorable_now = bool(favorable_measured[last])
+        # Hystérésis : on entre dans le créneau à la marge, on n'en sort qu'en repassant
+        # le croisement. Sans elle, une fin de créneau qui hésite autour de la marge
+        # (+0,2 °C le 13/10 à 18 h) se lisait « pas encore favorable » et annonçait une
+        # ouverture au pas suivant, alors que le créneau finissait.
+        if not favorable_now:
+            recent = past_measured[past_measured > last - REQUIRED_CONSECUTIVE_STEPS]
+            still_crossed, _ = _favorable_series(ext_vals, measured_int, mode, margin=0.0)
+            favorable_now = bool(favorable_measured[recent].any() and still_crossed[last])
     else:
         favorable_now = bool(favorable[future_known[0]]) if len(future_known) else False
+
+    sun_ok = np.ones(n, dtype=bool)
+    if mode == "froid" and "sun_elevation" in df.columns:
+        sun_ok = pd.to_numeric(df["sun_elevation"], errors="coerce").fillna(-90).to_numpy() >= SUN_MIN_ELEVATION_FROID
 
     opening_idx = None
     if not favorable_now:
         for i in range(n):
-            if is_future[i] and _holds_from(favorable, known, i, REQUIRED_CONSECUTIVE_STEPS):
+            if is_future[i] and sun_ok[i] and _holds_from(favorable, known, i, REQUIRED_CONSECUTIVE_STEPS):
                 opening_idx = i
                 break
 
