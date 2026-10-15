@@ -64,6 +64,8 @@ services:
       - INT_HOT_THRESHOLD_C=${INT_HOT_THRESHOLD_C:-}
       - FAVORABLE_MARGIN_CHAUD=${FAVORABLE_MARGIN_CHAUD:-}
       - FAVORABLE_MARGIN_FROID=${FAVORABLE_MARGIN_FROID:-}
+      # 1 = le modèle lit le CO₂ (détection d'ouverture). Collecté dans tous les cas.
+      - CO2_MODELE=${CO2_MODELE:-0}
     healthcheck: *healthcheck
 
   web-ui:

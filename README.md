@@ -3,7 +3,8 @@
 **micro-climat-predict** est une application conteneurisée conçue pour collecter, stocker et analyser les données micro-climatiques locales (via Home Assistant) et les croiser avec des données météorologiques ouvertes (Open-Meteo) ainsi qu'avec des modèles de positionnement solaire précis. L'objectif final est d'alimenter un moteur de machine learning pour prédire l'évolution thermique intérieure (notamment l'impact des ombres de la rue).
 
 Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/jmfavreau/micro-climat-predict)
-(AGPL-3.0), adapté à une autre maison : autres capteurs, pas de CO₂, un poêle à granulés,
+(AGPL-3.0), adapté à une autre maison : autres capteurs, un CO₂ collecté mais pas encore lu par le modèle,
+un poêle à granulés,
 hébergement sur un NAS. Le code complet de cette version est publié ici conformément à la
 licence. Les différences avec l'amont sont listées [plus bas](#différences-avec-lamont).
 
@@ -50,7 +51,8 @@ défaut du code.
 | `EXT_ENTITY`, `HUM_ENTITY` | température et humidité extérieures |
 | `INT_TEMP_ENTITY`, `INT_HUM_ENTITY`, `HA_COR_TEMP`, `COR_HUM_ENTITY` | sondes intérieures ; `int_temp_min` est le minimum des températures présentes |
 | `HA_INTERIOR_TEMP_MIN` | entité affichée sur la page d'accueil (chez l'amont, un capteur template du minimum intérieur) |
-| `CO2_ENTITY` | détection des ouvertures de fenêtres ; vide = pas de détection |
+| `CO2_ENTITY` | CO₂ collecté, archivé et affiché ; vide = pas de CO₂ |
+| `CO2_MODELE` | `1` : le modèle d'inertie lit le CO₂ (détection d'ouverture) ; `0` par défaut, voir [Limites connues](#limites-connues) |
 | `STOVE_POWER_ENTITY` | puissance du poêle en W, archivée mais pas encore lue par le modèle |
 | `INT_HOT_THRESHOLD_C` | seuil « intérieur chaud » du détecteur CO₂ (23 °C) |
 | `FAVORABLE_MARGIN_CHAUD`, `FAVORABLE_MARGIN_FROID` | hystérésis du conseil d'aération (0,5 et 0,3 °C) |
@@ -94,6 +96,9 @@ défaut du code.
   préchargé ou une balise `<img>` suffisait à lancer.
 - **Pannes visibles** : le web-ui journalise chaque entité HA injoignable ou non numérique au
   lieu d'afficher `--` sans trace.
+- **Simulation d'inertie depuis le début des données**, et non depuis le premier relevé de
+  CO₂ : chez l'amont, brancher un capteur réduisait l'ajustement aux jours suivants (rejoué :
+  simulation démarrant au 08/10 au lieu du 24/08, terme solaire `e` tombé à zéro).
 - **Collecte en échec quand HA ne fournit rien** : `/api/collect` répond 502 et journalise
   `error`, voir [Exploitation](#exploitation).
 
@@ -118,8 +123,9 @@ saisons.
 
 Le détecteur d'ouverture par le CO₂ s'inverse aussi. Son critère d'été (intérieur plus chaud
 que l'extérieur et qui baisse) décrit toutes les nuits d'hiver, et aurait exclu de
-l'ajustement les données dont un modèle hivernal a besoin. Faute de capteur CO₂ sur cette
-installation, la branche froide n'a jamais tourné sur des données réelles.
+l'ajustement les données dont un modèle hivernal a besoin. La branche froide n'a jamais tourné
+sur des données réelles : le capteur CO₂ est collecté depuis le 15/10/2026, mais le modèle ne
+le lit pas encore (`CO2_MODELE`).
 
 ## Publication dans Home Assistant
 
@@ -155,7 +161,12 @@ exposent un indice de 1 à 6, pas une concentration en µg/m³.
 
 ## Limites connues
 
-- Sans capteur CO₂, pas de détection d'ouverture : le modèle d'inertie ne distingue pas les
+- **CO₂ collecté, pas encore lu par le modèle** (`CO2_MODELE=0`). Rejoué le 15/10/2026 sur la
+  base réelle avec une semaine de CO₂ vers 450 ppm, le niveau du salon : en saison froide, le
+  critère « CO₂ sous 700 ppm, extérieur plus chaud, intérieur qui monte » marque 58 pas
+  (près de 10 h) « fenêtres ouvertes » sans ouverture réelle. Ces seuils viennent de la maison
+  de l'amont : les recaler sur quelques semaines de vrais relevés avant d'activer.
+- Tant que le CO₂ n'est pas lu, pas de détection d'ouverture : le modèle d'inertie ne distingue pas les
   périodes fenêtres ouvertes, ce qui dégrade la prévision intérieure en été.
 - En plein hiver l'extérieur ne dépasse jamais l'intérieur : les capteurs d'ouverture et de
   fermeture restent `unknown` des semaines durant. C'est attendu. L'aération d'hygiène

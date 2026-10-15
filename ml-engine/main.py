@@ -34,6 +34,12 @@ DEFAULT_SEASON = "chaud"
 LAT = float(os.getenv("LAT", 45.7797))
 LON = float(os.getenv("LON", 3.0863))
 
+# Le CO₂ est collecté dès que CO2_ENTITY est renseigné, mais le modèle ne le lit
+# que si CO2_MODELE=1. Ses seuils de détection d'ouverture viennent d'une autre
+# maison : rejoués ici, un salon autour de 450 ppm passait pour « fenêtres
+# ouvertes » des heures durant en saison froide. Les relever avant de l'activer.
+CO2_MODELE = os.getenv("CO2_MODELE", "0") == "1"
+
 FEATURES_BASE = [
     "meteo_temp", "meteo_hum", "wind_speed", "sun_elevation", "sun_azimuth",
     "meteo_temp_lag1", "meteo_temp_lag6", "meteo_temp_lag12", "meteo_temp_lag72", "meteo_temp_lag144",
@@ -268,8 +274,9 @@ def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e
     if len(start_indices) == 0:
         return T_est
 
-    valid_co2_indices = np.where(~np.isnan(co2_raw_series.values))[0]
-    start_idx = valid_co2_indices[0] if len(valid_co2_indices) > 0 else 0
+    # L'amont démarrait au premier relevé de CO₂ : brancher un capteur réduisait
+    # l'ajustement aux seuls jours qui suivent. Sans CO₂, l'excès vaut 0.
+    start_idx = 0
 
     base_val = float(actuals[start_idx]) if not np.isnan(actuals[start_idx]) else float(actuals[first_valid_idx])
 
@@ -452,6 +459,8 @@ def load_and_prepare_data() -> pd.DataFrame:
     # Une colonne entièrement NULL (ex. co2 sans capteur) sort de SQLite en dtype object,
     # ce qui fait échouer interpolate(). On force tout en numérique.
     df = df.apply(pd.to_numeric, errors="coerce")
+    if not CO2_MODELE and "co2" in df.columns:
+        df["co2"] = np.nan
 
     df = df.resample("10min").mean().interpolate(method="linear").reset_index()
 
