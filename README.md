@@ -162,7 +162,8 @@ exposent un indice de 1 à 6, pas une concentration en µg/m³.
 ## Limites connues
 
 - **CO₂ collecté, pas encore lu par le modèle** (`CO2_MODELE=0`). Rejoué le 15/10/2026 sur la
-  base réelle avec une semaine de CO₂ vers 450 ppm, le niveau du salon : en saison froide, le
+  base réelle, avec une semaine de CO₂ **synthétique** vers 450 ppm (le niveau mesuré au salon ;
+  le capteur n'est collecté que depuis le 15/10) : en saison froide, le
   critère « CO₂ sous 700 ppm, extérieur plus chaud, intérieur qui monte » marque 58 pas
   (près de 10 h) « fenêtres ouvertes » sans ouverture réelle. Ces seuils viennent de la maison
   de l'amont : les recaler sur quelques semaines de vrais relevés avant d'activer.
