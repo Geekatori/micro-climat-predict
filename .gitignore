@@ -8,3 +8,6 @@ docker-compose.override.yml
 # Journal d'exploitation et notes de développement local, propres à ce poste
 TODO.md
 LOCAL.md
+
+# Brouillons et notes de session, locaux
+docs/wip/

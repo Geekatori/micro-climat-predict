@@ -1,5 +1,5 @@
 # Fork de micro-climat-predict (jmfavreau, AGPL-3.0). Les différences avec l'amont
-# sont listées dans README.md.
+# sont listées dans docs/differences-avec-l-amont.md.
 
 # Sonde commune aux trois services FastAPI. Les images python:3.11-slim n'ont ni curl
 # ni wget. `/openapi.json` prouve que uvicorn a chargé l'application avec ses routes.

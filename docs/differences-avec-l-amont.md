@@ -1,0 +1,60 @@
+# micro-climat-predict : différences avec l'amont
+
+Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/jmfavreau/micro-climat-predict)
+(AGPL-3.0), adapté à une autre maison. Voici ce qui diffère de l'amont, et pourquoi.
+
+## Configuration et déploiement
+
+- **Entités HA configurables** par `.env` au lieu d'être codées dans `data-collector/main.py`
+  ([`reference.md`](reference.md#configuration)).
+- **Ports liés à `127.0.0.1`** et déplacés en 8730 à 8732 ; seule l'interface peut s'ouvrir au
+  réseau, par `WEB_BIND` ([décision 0001](decisions/0001-ports-en-boucle-locale.md)).
+- **SQLite en bind mount `./data`** au lieu d'un volume anonyme : la base suit les sauvegardes du
+  dossier ([décision 0002](decisions/0002-base-dans-un-dossier-monte.md)).
+- **`restart: always`** au lieu de `unless-stopped`, pour Unraid
+  ([décision 0003](decisions/0003-restart-always.md)).
+- **Cron d'entraînement** : `/api/train` est en POST, `wget` l'appelait en GET. Il tourne à
+  5 h 30 heure locale ; `tzdata` est dans l'image de l'ordonnanceur (`scheduler/Dockerfile`,
+  Alpine 3.22) au lieu d'un `apk add` au démarrage
+  ([décision 0004](decisions/0004-ordonnanceur-construit-avec-tzdata.md)).
+- **Sondes de santé** sur les trois services web (`/openapi.json` toutes les 60 s)
+  ([décision 0005](decisions/0005-sondes-sur-openapi.md)).
+
+## Corrections
+
+- **`LAT`/`LON` transmis au `ml-engine`** : l'amont calculait la position du soleil sur ses
+  coordonnées par défaut quelle que soit la configuration.
+- **Historique HA : timeout 120 s et `no_attributes`** : dix jours sur six entités dépassaient
+  les 20 s, en silence.
+- **Colonnes vides tolérées** dans le `ml-engine` : une colonne entièrement NULL sort de SQLite
+  en dtype `object` et faisait échouer `interpolate()`.
+- **Reset total** : supprime les trois fichiers de modèle réellement produits. L'amont ne
+  supprimait que `model_int.joblib`, qui n'existe pas.
+- **Simulation d'inertie depuis le début des données**, et non depuis le premier relevé de CO₂
+  ([décision 0013](decisions/0013-simulation-depuis-le-debut-des-donnees.md)).
+- **État courant du conseil jugé sur la mesure**, pas sur la simulation du passé
+  ([décision 0010](decisions/0010-etat-courant-sur-la-mesure.md)).
+
+## Fonctions ajoutées
+
+- **Mode saisonnier** et **heure de fermeture** : le conseil d'aération s'inverse en saison
+  froide ([décision 0008](decisions/0008-mode-saisonnier.md)), avec une hystérésis propre à
+  chaque saison ([décision 0009](decisions/0009-hysteresis-par-saison.md)) et pas d'ouverture
+  soleil bas en saison froide ([décision 0016](decisions/0016-pas-d-ouverture-soleil-bas-en-saison-froide.md)).
+- **Publication des prédictions dans HA** ([décision 0006](decisions/0006-publication-ha-par-l-api-rest.md)).
+- **CO₂ collecté, archivé et affiché**, lu par le modèle seulement si `CO2_MODELE=1`
+  ([décision 0012](decisions/0012-co2-collecte-hors-modele.md)).
+- **Puissance du poêle archivée** (`stove_power`, en W) pour un futur modèle hivernal
+  ([décision 0011](decisions/0011-poele-archive-hors-modele.md)).
+- **Qualité de l'air par Open-Meteo** au lieu de `PM25_ENTITY` / `PM10_ENTITY`
+  ([décision 0007](decisions/0007-qualite-de-l-air-par-open-meteo.md)).
+
+## Sécurité et pannes visibles
+
+- **Déclencheurs en POST** : `/trigger-*` et `/api/backfill-co2` étaient des GET, qu'un lien
+  préchargé ou une balise `<img>` suffisait à lancer ; garde d'origine sur tous les POST ; reset
+  total désactivé sauf `ALLOW_RESET=1`, avec saisie de `SUPPRIMER`
+  ([décision 0014](decisions/0014-declencheurs-en-post-et-garde-d-origine.md)).
+- **Pannes visibles** : le web-ui journalise chaque entité HA injoignable ou non numérique au
+  lieu d'afficher `--` sans trace ; `/api/collect` répond 502 quand HA ne fournit rien ; route
+  `/health/fraicheur` ([décision 0015](decisions/0015-les-pannes-se-voient.md)).
