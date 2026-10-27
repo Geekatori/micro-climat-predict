@@ -57,4 +57,5 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   ([décision 0014](decisions/0014-declencheurs-en-post-et-garde-d-origine.md)).
 - **Pannes visibles** : le web-ui journalise chaque entité HA injoignable ou non numérique au
   lieu d'afficher `--` sans trace ; `/api/collect` répond 502 quand HA ne fournit rien ; route
-  `/health/fraicheur` ([décision 0015](decisions/0015-les-pannes-se-voient.md)).
+  `/health/fraicheur` ; ping Healthchecks facultatif après chaque collecte, `HC_COLLECT_URL`
+  ([décision 0015](decisions/0015-les-pannes-se-voient.md)).

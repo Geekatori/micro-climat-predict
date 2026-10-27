@@ -112,8 +112,13 @@ services:
     container_name: mcp-scheduler
     environment:
       - TZ=${TZ:-Europe/Paris}
+      # Facultatif : URL de ping d'un Healthchecks. Chaque collecte réussie la pingue, un
+      # échec pingue `/fail` (décision 0015). Vide, la ligne de collecte reste nue.
+      - HC_COLLECT_URL=${HC_COLLECT_URL:-}
     command: >
-      /bin/sh -c "echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect' > /etc/crontabs/root &&
+      /bin/sh -c "ping= && [ -z $$HC_COLLECT_URL ] ||
+                  ping=' && wget -qO- '$$HC_COLLECT_URL' || wget -qO- '$$HC_COLLECT_URL'/fail' &&
+                  echo '8,38 * * * * wget -qO- http://data-collector:8000/api/collect'$$ping > /etc/crontabs/root &&
                   echo '12,42 * * * * wget -qO- --post-data= http://web-ui:8000/api/publish-ha' >> /etc/crontabs/root &&
                   echo '30 5 * * * wget -qO- --post-data= http://ml-engine:8000/api/train' >> /etc/crontabs/root &&
                   chmod 0600 /etc/crontabs/root &&

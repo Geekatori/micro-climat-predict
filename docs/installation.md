@@ -44,5 +44,6 @@ l'interface (`net.unraid.docker.webui`) est déjà dans le compose. Les conteneu
 
 - `/health/fraicheur` sur le web-ui, pour une sonde HTTP externe
   ([`reference.md`](reference.md#la-route-de-fraîcheur)).
-- Une collecte vide répond 502 : une ligne crontab qui enchaîne un ping par `&&` après la
-  collecte remonte l'échec ([décision 0015](decisions/0015-les-pannes-se-voient.md)).
+- `HC_COLLECT_URL` dans `.env` : chaque collecte pingue un Healthchecks, et une collecte vide
+  (502) pingue `/fail` ([décision 0015](decisions/0015-les-pannes-se-voient.md)). Recréer
+  `cron` après l'avoir changée : la crontab s'écrit au démarrage du conteneur.

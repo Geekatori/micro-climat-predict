@@ -23,6 +23,9 @@ journaux, une sonde externe ne voyant que la collecte.
 - **Fraîcheur** : `GET /health/fraicheur` sur le web-ui répond 503 dès que la collecte, la
   publication ou l'entraînement ont cessé de réussir (seuils dans
   [`reference.md`](../reference.md#la-route-de-fraîcheur)). Une sonde externe (Gatus) la consulte.
+- **Ping de la collecte**, facultatif (ajouté le 26/10/2026) : `HC_COLLECT_URL` renseignée, le
+  planificateur pingue cette URL après chaque collecte réussie, et `/fail` après un échec. Un
+  Healthchecks voit ainsi aussi une collecte qui ne part plus du tout.
 
 ## Options écartées
 
@@ -33,5 +36,5 @@ journaux, une sonde externe ne voyant que la collecte.
 
 ## Conséquences
 
-- Le `wget` du planificateur échoue sur une collecte en 502 : une ligne crontab qui enchaîne un
-  ping par `&&` envoie `/fail` au lieu d'un battement vert.
+- Le `wget` du planificateur échoue sur une collecte en 502 : le ping de la collecte envoie
+  `/fail` au lieu d'un battement vert.

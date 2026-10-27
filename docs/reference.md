@@ -39,6 +39,7 @@ correspondant. Hors compose, les identifiants de l'amont restent les valeurs par
 | `WEB_BIND`, `WEB_PORT`, `ML_PORT`, `COLLECTOR_PORT`, `TZ` | réseau, fuseau du planificateur |
 | `ALLOW_RESET` | `1` autorise le reset total de `/admin` ; absent ou `0` (défaut), la route répond 403 |
 | `ALLOWED_ORIGINS` | facultatif, séparées par des virgules : origines admises par la garde d'origine en plus de l'hôte de la requête, par exemple un nom servi par un proxy |
+| `HC_COLLECT_URL` | facultatif : URL de ping d'un Healthchecks, appelée après chaque collecte réussie, `/fail` ajouté après un échec ; vide, pas de ping ([décision 0015](decisions/0015-les-pannes-se-voient.md)) |
 | `UNRAID_ICON_URL` | icône de l'onglet Docker d'Unraid, vide ailleurs (le label est alors sans effet) |
 
 Le mode saisonnier n'est pas une variable d'environnement : il se règle depuis `/admin`
@@ -53,6 +54,9 @@ L'ordonnanceur (`cron`) appelle les services par le réseau interne, en heure lo
 | h+08 et h+38 | `wget -qO- http://data-collector:8000/api/collect` |
 | h+12 et h+42 | `wget -qO- --post-data= http://web-ui:8000/api/publish-ha` |
 | 5 h 30 | `wget -qO- --post-data= http://ml-engine:8000/api/train` |
+
+Quand `HC_COLLECT_URL` est renseignée, la ligne de collecte devient, au démarrage du conteneur,
+`… /api/collect && wget -qO- <url> || wget -qO- <url>/fail`.
 
 ## Fichiers de `data/`
 
