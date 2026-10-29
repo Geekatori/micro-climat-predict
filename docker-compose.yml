@@ -6,11 +6,16 @@
 # Pas `/` : le collecteur et le moteur n'ont pas de route racine, et urlopen lève sur
 # un 404. Pas /api/status/* : ces routes lisent SQLite et clignoteraient pendant
 # l'entraînement.
+# Toutes les 5 min et non 60 s : chaque passage lance un Python complet (environ 400 ms de
+# CPU, mesuré le 29/10/2026), trois fois par minute sur un N150. Un essai toutes les 5 s
+# pendant le démarrage, pour passer « healthy » sans attendre 5 min.
 x-healthcheck: &healthcheck
   test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
-  interval: 60s
+  interval: 5m
   timeout: 5s
   retries: 3
+  start_period: 60s
+  start_interval: 5s
 
 # `always` et non `unless-stopped` : sur Unraid, l'arrêt de l'array fait un `docker
 # stop` explicite, et un conteneur `unless-stopped` arrêté ainsi ne repart pas au boot
