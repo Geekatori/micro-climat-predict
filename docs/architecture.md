@@ -36,6 +36,10 @@ interne ([décision 0001](decisions/0001-ports-en-boucle-locale.md)).
 Une colonne entièrement NULL sort de SQLite en dtype `object` : le moteur la tolère avant
 `interpolate()`.
 
+L'interpolation comble les trous entre deux relevés, jamais après le dernier : les pas de
+prévision météo, plus récents que toute mesure, restent sans mesure et n'entrent pas dans
+l'entraînement.
+
 ## Le modèle d'inertie
 
 Le modèle d'inertie thermique est ajusté sur une simulation qui part du début des données, quel

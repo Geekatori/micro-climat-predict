@@ -462,7 +462,11 @@ def load_and_prepare_data() -> pd.DataFrame:
     if not CO2_MODELE and "co2" in df.columns:
         df["co2"] = np.nan
 
-    df = df.resample("10min").mean().interpolate(method="linear").reset_index()
+    # limit_area="inside" : on comble les trous entre deux relevés, jamais après le dernier.
+    # Sinon les lignes de prévision météo, plus récentes que toute mesure, recevaient la
+    # dernière mesure recopiée ; remove_constant_blocks n'en effaçait qu'à partir du 24e pas,
+    # et les 3 h 40 restantes entraient dans l'entraînement comme des relevés.
+    df = df.resample("10min").mean().interpolate(method="linear", limit_area="inside").reset_index()
 
     def remove_constant_blocks(dframe, cols=["ext_temp", "int_temp_min"], window=24):
         dframe = dframe.copy()

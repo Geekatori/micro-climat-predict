@@ -28,6 +28,9 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   les 20 s, en silence.
 - **Colonnes vides tolérées** dans le `ml-engine` : une colonne entièrement NULL sort de SQLite
   en dtype `object` et faisait échouer `interpolate()`.
+- **Pas de mesure inventée après la dernière** : l'interpolation recopiait la dernière mesure
+  sur les pas de prévision météo, et environ 3 h 40 de ces valeurs entraient dans
+  l'entraînement comme des relevés.
 - **Reset total** : supprime les trois fichiers de modèle réellement produits. L'amont ne
   supprimait que `model_int.joblib`, qui n'existe pas.
 - **Simulation d'inertie depuis le début des données**, et non depuis le premier relevé de CO₂
