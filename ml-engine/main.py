@@ -706,7 +706,10 @@ async def forecast_int():
     df["predicted_int_temp_gb"] = np.nan
     rf_mask = df[FEATURES_INT].notna().all(axis=1)
     if not df[rf_mask].empty:
-        df.loc[rf_mask, "predicted_int_temp_gb"] = model_gb.predict(df[rf_mask][FEATURES_INT])
+        # Le modèle prédit l'écart au pas précédent : sans int_temp_lag1, la page de
+        # validation comparait la mesure à un écart (21 °C d'« erreur »).
+        delta_int = model_gb.predict(df[rf_mask][FEATURES_INT])
+        df.loc[rf_mask, "predicted_int_temp_gb"] = df.loc[rf_mask, "int_temp_lag1"] + delta_int
 
     forecasts = []
     timestamps = pd.to_datetime(df["timestamp"])

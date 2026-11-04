@@ -17,7 +17,7 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   5 h 30 heure locale ; `tzdata` est dans l'image de l'ordonnanceur (`scheduler/Dockerfile`,
   Alpine 3.22) au lieu d'un `apk add` au démarrage
   ([décision 0004](decisions/0004-ordonnanceur-construit-avec-tzdata.md)).
-- **Sondes de santé** sur les trois services web (`/openapi.json` toutes les 60 s)
+- **Sondes de santé** sur les trois services web (`/openapi.json` toutes les 5 min)
   ([décision 0005](decisions/0005-sondes-sur-openapi.md)).
 
 ## Corrections
