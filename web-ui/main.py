@@ -99,11 +99,13 @@ app.add_middleware(OriginGuard)
 HA_URL = os.getenv("HA_URL", "http://supervisor/core/api")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 
-# Entités Home Assistant. Le compose passe ces variables en `${VAR:-}` : absentes du
-# `.env`, elles arrivent en chaîne vide, et `os.getenv` ne retombe pas sur son défaut.
+# Entités Home Assistant, comme dans le collecteur : une variable vide désactive le capteur
+# (chaîne vide), une variable absente garde l'entité de l'amont (hors compose seulement : le
+# compose passe toujours la variable, vide si le `.env` ne la donne pas). Une entité désactivée
+# n'est jamais demandée à HA, qui répondrait à `/api/states/` par la liste de tous ses états.
 def env_entity(name: str, default: str) -> str:
-    """Entity id configured in `name`, treating empty as unset."""
-    return (os.getenv(name) or "").strip() or default
+    """Entity id configured in `name`; empty means disabled."""
+    return os.getenv(name, default).strip()
 
 
 EXT_ENTITY = env_entity("EXT_ENTITY", "sensor.exterieur_temperature")
@@ -120,12 +122,6 @@ AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 # Open-Meteo publie un point par heure : inutile d'interroger à chaque chargement de page.
 AIR_QUALITY_TTL = timedelta(minutes=15)
 _air_quality_cache: dict = {}
-
-ENTITIES = {
-    "ext_temp": EXT_ENTITY,
-    "int_temp_min": INT_TEMP_MIN_ENTITY,
-    "cor_temp": os.getenv("HA_COR_TEMP", "sensor.temtop_c1plus_temtop_temperature"),
-}
 
 DB_PATH = "/app/data/metrics.db"
 
@@ -204,6 +200,8 @@ async def proxy_admin_predictions():
 
 async def fetch_temperature_trend(client: httpx.AsyncClient, headers: dict) -> str:
     """Compare current temperature with the value 1 hour ago to determine the trend arrow."""
+    if not EXT_ENTITY:
+        return ""
     now_utc = datetime.now(timezone.utc)
     start_time = now_utc - timedelta(hours=1)
     try:
@@ -236,6 +234,8 @@ async def fetch_weather_data() -> dict:
         "co2": CO2_ENTITY,
     }
     result = {k: None for k in entities}
+    # Capteur désactivé : la valeur reste à None, affichée "--", sans requête.
+    entities = {k: eid for k, eid in entities.items() if eid}
     result["last_updated"] = None
     result["trend"] = ""
 
@@ -818,6 +818,8 @@ async def get_analysis():
 @app.post("/api/backfill-co2")
 async def backfill_co2(days: int = 30):
     co2_entity = CO2_ENTITY
+    if not co2_entity:
+        return {"status": "error", "message": "CO2_ENTITY est vide : pas de capteur de CO2."}
 
     if not os.path.exists(DB_PATH):
         return {"status": "error", "message": "Database not found."}
