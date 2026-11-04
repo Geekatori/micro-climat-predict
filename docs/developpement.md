@@ -26,6 +26,9 @@ leurs en-têtes. Inutile sur un serveur Linux, où les conteneurs joignent le LA
   publication dans HA. L'heure d'affichage `Europe/Paris` est en dur (hérité de l'amont).
 - Un signal en marches (puissance du poêle) se rééchantillonne au maximum et se prolonge, jamais
   par interpolation ([décision 0011](decisions/0011-poele-archive-hors-modele.md)).
+- Toute connexion SQLite s'ouvre par `with connexion() as conn:` : elle valide ou annule, se
+  ferme même sur une exception, et attend un verrou 30 s. Un `sqlite3.connect()` nu laissait,
+  sur une erreur, une transaction ouverte qui verrouillait la base pour les autres services.
 - Une panne doit se voir : une route qui ne reçoit rien d'exploitable répond en erreur et le
   journalise, plutôt que d'afficher `--` ou de répondre succès
   ([décision 0015](decisions/0015-les-pannes-se-voient.md)).

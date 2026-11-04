@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import math
 import os
 import sqlite3
+from contextlib import contextmanager
 from dotenv import load_dotenv
 import httpx
 from fastapi import FastAPI
@@ -58,6 +59,27 @@ def clear_db_cache():
     _db_cache.clear()
     print(f"[{datetime.now()}] Database cache cleared.")
 
+# Attente d'un verrou SQLite, en secondes. Les 5 s par défaut ne suffisent pas quand le moteur
+# relit toute la base (entraînement, recalcul des prévisions) pendant une collecte.
+DB_TIMEOUT = 30
+
+
+@contextmanager
+def connexion(path: str | None = None):
+    """Connexion qui valide si le bloc passe, annule sinon, et se ferme toujours.
+
+    Une écriture qui levait en cours de route gardait sa connexion ouverte, transaction
+    comprise : la base est restée verrouillée pour les trois services jusqu'au
+    redémarrage du collecteur.
+    """
+    conn = sqlite3.connect(path or DB_PATH, timeout=DB_TIMEOUT)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def migrate_db(conn):
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(metrics)")
@@ -93,61 +115,56 @@ def migrate_db(conn):
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    with connexion() as conn:
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS metrics (
-            timestamp TEXT PRIMARY KEY,
-            ext_temp REAL,
-            ext_hum REAL,
-            int_temp REAL,
-            int_hum REAL,
-            cor_temp REAL,
-            cor_hum REAL,
-            co2 REAL,
-            stove_power REAL,
-            meteo_temp REAL,
-            meteo_hum REAL,
-            wind_speed REAL,
-            cloud_cover REAL,
-            direct_radiation REAL,
-            int_temp_min REAL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS weather_forecasts (
-            timestamp TEXT PRIMARY KEY,
-            meteo_temp REAL,
-            meteo_hum REAL,
-            wind_speed REAL,
-            cloud_cover REAL,
-            direct_radiation REAL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS collection_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            days_fetched INTEGER,
-            rows_processed INTEGER,
-            status TEXT,
-            message TEXT
-        )
-    """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS metrics (
+                timestamp TEXT PRIMARY KEY,
+                ext_temp REAL,
+                ext_hum REAL,
+                int_temp REAL,
+                int_hum REAL,
+                cor_temp REAL,
+                cor_hum REAL,
+                co2 REAL,
+                stove_power REAL,
+                meteo_temp REAL,
+                meteo_hum REAL,
+                wind_speed REAL,
+                cloud_cover REAL,
+                direct_radiation REAL,
+                int_temp_min REAL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS weather_forecasts (
+                timestamp TEXT PRIMARY KEY,
+                meteo_temp REAL,
+                meteo_hum REAL,
+                wind_speed REAL,
+                cloud_cover REAL,
+                direct_radiation REAL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS collection_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                days_fetched INTEGER,
+                rows_processed INTEGER,
+                status TEXT,
+                message TEXT
+            )
+        """)
 
-    migrate_db(conn)
+        migrate_db(conn)
 
-    conn.commit()
-    conn.close()
 
 def get_optimal_fetch_window(db_path: str) -> int:
     if not os.path.exists(db_path): return 10
-    conn = sqlite3.connect(db_path)
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM metrics")
-        count = cursor.fetchone()[0]
-        conn.close()
+        with connexion(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM metrics").fetchone()[0]
         return 2 if count > 0 else 10
     except: return 10
 
@@ -317,44 +334,42 @@ async def run_collection(days: int = None):
 
             final_past_df["timestamp"] = final_past_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-            conn = sqlite3.connect(DB_PATH)
-            final_past_df.to_sql("metrics_temp", conn, if_exists="replace", index=False)
-            conn.execute("""
-                INSERT OR IGNORE INTO metrics (
-                    timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
-                )
-                SELECT
-                    timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                    cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
-                FROM metrics_temp;
-            """)
+            with connexion() as conn:
+                final_past_df.to_sql("metrics_temp", conn, if_exists="replace", index=False)
+                conn.execute("""
+                    INSERT OR IGNORE INTO metrics (
+                        timestamp, ext_temp, ext_hum, int_temp, int_hum,
+                        cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
+                    )
+                    SELECT
+                        timestamp, ext_temp, ext_hum, int_temp, int_hum,
+                        cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
+                    FROM metrics_temp;
+                """)
 
-            # 2. On met à jour les lignes existantes en évitant d'écraser par du NULL
-            conn.execute("""
-                UPDATE metrics
-                SET
-                    ext_temp = COALESCE(metrics_temp.ext_temp, metrics.ext_temp),
-                    ext_hum = COALESCE(metrics_temp.ext_hum, metrics.ext_hum),
-                    int_temp = COALESCE(metrics_temp.int_temp, metrics.int_temp),
-                    int_hum = COALESCE(metrics_temp.int_hum, metrics.int_hum),
-                    cor_temp = COALESCE(metrics_temp.cor_temp, metrics.cor_temp),
-                    cor_hum = COALESCE(metrics_temp.cor_hum, metrics.cor_hum),
-                    co2 = COALESCE(metrics_temp.co2, metrics.co2),
-                    stove_power = COALESCE(metrics_temp.stove_power, metrics.stove_power),
-                    meteo_temp = COALESCE(metrics_temp.meteo_temp, metrics.meteo_temp),
-                    meteo_hum = COALESCE(metrics_temp.meteo_hum, metrics.meteo_hum),
-                    wind_speed = COALESCE(metrics_temp.wind_speed, metrics.wind_speed),
-                    cloud_cover = COALESCE(metrics_temp.cloud_cover, metrics.cloud_cover),
-                    direct_radiation = COALESCE(metrics_temp.direct_radiation, metrics.direct_radiation),
-                    int_temp_min = COALESCE(metrics_temp.int_temp_min, metrics.int_temp_min)
-                FROM metrics_temp
-                WHERE metrics.timestamp = metrics_temp.timestamp;
-            """)
+                # 2. On met à jour les lignes existantes en évitant d'écraser par du NULL
+                conn.execute("""
+                    UPDATE metrics
+                    SET
+                        ext_temp = COALESCE(metrics_temp.ext_temp, metrics.ext_temp),
+                        ext_hum = COALESCE(metrics_temp.ext_hum, metrics.ext_hum),
+                        int_temp = COALESCE(metrics_temp.int_temp, metrics.int_temp),
+                        int_hum = COALESCE(metrics_temp.int_hum, metrics.int_hum),
+                        cor_temp = COALESCE(metrics_temp.cor_temp, metrics.cor_temp),
+                        cor_hum = COALESCE(metrics_temp.cor_hum, metrics.cor_hum),
+                        co2 = COALESCE(metrics_temp.co2, metrics.co2),
+                        stove_power = COALESCE(metrics_temp.stove_power, metrics.stove_power),
+                        meteo_temp = COALESCE(metrics_temp.meteo_temp, metrics.meteo_temp),
+                        meteo_hum = COALESCE(metrics_temp.meteo_hum, metrics.meteo_hum),
+                        wind_speed = COALESCE(metrics_temp.wind_speed, metrics.wind_speed),
+                        cloud_cover = COALESCE(metrics_temp.cloud_cover, metrics.cloud_cover),
+                        direct_radiation = COALESCE(metrics_temp.direct_radiation, metrics.direct_radiation),
+                        int_temp_min = COALESCE(metrics_temp.int_temp_min, metrics.int_temp_min)
+                    FROM metrics_temp
+                    WHERE metrics.timestamp = metrics_temp.timestamp;
+                """)
 
-            conn.execute("DROP TABLE metrics_temp")
-            conn.commit()
-            conn.close()
+                conn.execute("DROP TABLE metrics_temp")
 
         # 2. Process Future Weather Forecasts (Volatile Cache)
         # 2. Process Future Weather Forecasts (Volatile Cache)
@@ -369,10 +384,8 @@ async def run_collection(days: int = None):
 
             final_future_df["timestamp"] = final_future_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-            conn = sqlite3.connect(DB_PATH)
-            final_future_df.to_sql("weather_forecasts", conn, if_exists="replace", index=False)
-            conn.commit()
-            conn.close()
+            with connexion() as conn:
+                final_future_df.to_sql("weather_forecasts", conn, if_exists="replace", index=False)
 
         rows_processed = len(dfs_past[0]) if dfs_past else 0
 
@@ -388,13 +401,11 @@ async def run_collection(days: int = None):
             status, message = "success", f"Collection completed successfully (HA : {ha_points} points" + (
                 f", sans point : {', '.join(silent)})" if silent else ")")
 
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("""
-            INSERT INTO collection_logs (timestamp, days_fetched, rows_processed, status, message)
-            VALUES (?, ?, ?, ?, ?)
-        """, (now_str, days_to_fetch, rows_processed, status, message))
-        conn.commit()
-        conn.close()
+        with connexion() as conn:
+            conn.execute("""
+                INSERT INTO collection_logs (timestamp, days_fetched, rows_processed, status, message)
+                VALUES (?, ?, ?, ?, ?)
+            """, (now_str, days_to_fetch, rows_processed, status, message))
 
         clear_db_cache()
 
@@ -408,13 +419,11 @@ async def run_collection(days: int = None):
 
     except Exception as e:
         try:
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute("""
-                INSERT INTO collection_logs (timestamp, days_fetched, rows_processed, status, message)
-                VALUES (?, ?, ?, ?, ?)
-            """, (now_str, days_to_fetch, 0, "error", str(e)))
-            conn.commit()
-            conn.close()
+            with connexion() as conn:
+                conn.execute("""
+                    INSERT INTO collection_logs (timestamp, days_fetched, rows_processed, status, message)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (now_str, days_to_fetch, 0, "error", str(e)))
         except:
             pass
         raise e
@@ -436,16 +445,15 @@ async def get_history_data(version: str):
     start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql(
-            "SELECT timestamp, ext_temp, int_temp_min, cor_temp, int_temp "
-            "FROM metrics "
-            "WHERE timestamp >= ? "
-            "ORDER BY timestamp ASC",
-            conn,
-            params=(start_str_db,)
-        )
-        conn.close()
+        with connexion() as conn:
+            df = pd.read_sql(
+                "SELECT timestamp, ext_temp, int_temp_min, cor_temp, int_temp "
+                "FROM metrics "
+                "WHERE timestamp >= ? "
+                "ORDER BY timestamp ASC",
+                conn,
+                params=(start_str_db,)
+            )
 
         if df.empty:
             result = {"status": "success", "data": []}
@@ -471,14 +479,13 @@ async def get_current_metrics():
         return _db_cache[cache_key]
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql(
-            "SELECT ext_temp, int_temp_min, cor_temp, int_temp "
-            "FROM metrics "
-            "ORDER BY timestamp DESC LIMIT 1",
-            conn
-        )
-        conn.close()
+        with connexion() as conn:
+            df = pd.read_sql(
+                "SELECT ext_temp, int_temp_min, cor_temp, int_temp "
+                "FROM metrics "
+                "ORDER BY timestamp DESC LIMIT 1",
+                conn
+            )
 
         if df.empty:
             result = {"status": "success", "data": {}}
@@ -502,11 +509,10 @@ async def get_open_meteo():
         return _db_cache[cache_key]
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        # Fetch past and future meteo temps, combining them
-        df_m = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL", conn)
-        df_f = pd.read_sql("SELECT timestamp, meteo_temp FROM weather_forecasts WHERE meteo_temp IS NOT NULL", conn)
-        conn.close()
+        with connexion() as conn:
+            # Fetch past and future meteo temps, combining them
+            df_m = pd.read_sql("SELECT timestamp, meteo_temp FROM metrics WHERE meteo_temp IS NOT NULL", conn)
+            df_f = pd.read_sql("SELECT timestamp, meteo_temp FROM weather_forecasts WHERE meteo_temp IS NOT NULL", conn)
 
         # Merge and drop duplicates
         df = pd.concat([df_m, df_f]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
@@ -526,11 +532,10 @@ async def get_open_meteo():
 @app.get("/api/status/last-collection")
 def get_last_collection():
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
-        row = cursor.fetchone()
-        conn.close()
+        with connexion() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
+            row = cursor.fetchone()
 
         last_ts = row[0] if row else None
         return {"status": "success", "last_collection": last_ts}
@@ -548,9 +553,8 @@ async def get_admin_stats():
         return _db_cache[cache_key]
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
-        conn.close()
+        with connexion() as conn:
+            df = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
 
         if df.empty:
             return {"status": "empty"}
@@ -612,14 +616,13 @@ async def get_admin_chart(days: int = 7):
     start_str_db = start_time.strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        df_metrics = pd.read_sql(
-            "SELECT * FROM metrics WHERE timestamp >= ? ORDER BY timestamp ASC",
-            conn,
-            params=(start_str_db,)
-        )
-        df_forecasts = pd.read_sql("SELECT * FROM weather_forecasts ORDER BY timestamp ASC", conn)
-        conn.close()
+        with connexion() as conn:
+            df_metrics = pd.read_sql(
+                "SELECT * FROM metrics WHERE timestamp >= ? ORDER BY timestamp ASC",
+                conn,
+                params=(start_str_db,)
+            )
+            df_forecasts = pd.read_sql("SELECT * FROM weather_forecasts ORDER BY timestamp ASC", conn)
 
         # Nettoyage des NaN pour le JSON
         df_metrics = df_metrics.where(pd.notnull(df_metrics), None)

@@ -3,6 +3,7 @@ from scipy.optimize import minimize
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 import joblib
 import math
 from fastapi import FastAPI, HTTPException, Query
@@ -20,6 +21,25 @@ from functools import wraps
 app = FastAPI()
 
 DB_PATH = "/app/data/metrics.db"
+
+# Attente d'un verrou SQLite, en secondes (5 par défaut). Voir connexion().
+DB_TIMEOUT = 30
+
+
+@contextmanager
+def connexion():
+    """Connexion qui valide si le bloc passe, annule sinon, et se ferme toujours.
+
+    Une écriture qui levait en cours de route gardait sa connexion ouverte, transaction
+    comprise, et verrouillait la base pour les trois services jusqu'au redémarrage.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
 MODEL_EXT_PATH = "/app/data/model_ext.joblib"
 MODEL_INT_RF_PATH = "/app/data/model_int_gb.joblib"
 MODEL_INT_STD_PATH = "/app/data/model_int_std.joblib"
@@ -67,11 +87,10 @@ _smart_json_cache = {"timestamp": None, "json": None}
 def get_db_last_timestamp() -> str:
     try:
         if os.path.exists(DB_PATH):
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
-            row = cursor.fetchone()
-            conn.close()
+            with connexion() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT 1")
+                row = cursor.fetchone()
             if row:
                 return row[0]
     except:
@@ -128,21 +147,19 @@ def clean_for_json(data):
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS training_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            rows_ext INTEGER,
-            rows_int INTEGER,
-            rmse_ext REAL,
-            rmse_int REAL,
-            status TEXT,
-            message TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with connexion() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS training_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                rows_ext INTEGER,
+                rows_int INTEGER,
+                rmse_ext REAL,
+                rmse_int REAL,
+                status TEXT,
+                message TEXT
+            )
+        """)
 
 def add_solar_features(df: pd.DataFrame) -> pd.DataFrame:
     elevs, azims = [], []
@@ -441,13 +458,12 @@ def load_and_prepare_data() -> pd.DataFrame:
     if not os.path.exists(DB_PATH):
         raise HTTPException(status_code=404, detail="Database not found.")
 
-    conn = sqlite3.connect(DB_PATH)
-    df_m = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
-    try:
-        df_f = pd.read_sql("SELECT * FROM weather_forecasts ORDER BY timestamp ASC", conn)
-    except:
-        df_f = pd.DataFrame()
-    conn.close()
+    with connexion() as conn:
+        df_m = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
+        try:
+            df_f = pd.read_sql("SELECT * FROM weather_forecasts ORDER BY timestamp ASC", conn)
+        except:
+            df_f = pd.DataFrame()
 
     if df_m.empty:
         raise HTTPException(status_code=400, detail="Database is empty.")
@@ -621,13 +637,11 @@ def train_models():
 
     joblib.dump(best_params_std, MODEL_INT_STD_PATH)
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std}"))
-    conn.commit()
-    conn.close()
+    with connexion() as conn:
+        conn.execute("""
+            INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std}"))
 
     # Invalidate cache so next requests trigger re-simulation with new models
     clear_caches()
@@ -1004,11 +1018,10 @@ async def get_annotated_metrics():
 @app.get("/api/status/last-training")
 def get_last_training():
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT timestamp FROM training_logs ORDER BY id DESC LIMIT 1")
-        row = cursor.fetchone()
-        conn.close()
+        with connexion() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp FROM training_logs ORDER BY id DESC LIMIT 1")
+            row = cursor.fetchone()
 
         last_train = row[0] if row else None
         return {"status": "success", "last_training": last_train}

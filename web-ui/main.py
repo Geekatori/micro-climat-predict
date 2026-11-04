@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sqlite3
+from contextlib import contextmanager
 import httpx
 import numpy as np
 import pandas as pd
@@ -127,6 +128,25 @@ ENTITIES = {
 }
 
 DB_PATH = "/app/data/metrics.db"
+
+# Attente d'un verrou SQLite, en secondes (5 par défaut). Voir connexion().
+DB_TIMEOUT = 30
+
+
+@contextmanager
+def connexion():
+    """Connexion qui valide si le bloc passe, annule sinon, et se ferme toujours.
+
+    Une écriture qui levait en cours de route gardait sa connexion ouverte, transaction
+    comprise, et verrouillait la base pour les trois services jusqu'au redémarrage.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
 # Les trois fichiers produits par /api/train du ml-engine, supprimés par le reset total.
 MODEL_PATHS = [
     "/app/data/model_ext.joblib",
@@ -464,13 +484,12 @@ async def logs_page(request: Request):
 
     if db_exists:
         try:
-            conn = sqlite3.connect(DB_PATH)
-            df_col = pd.read_sql("SELECT * FROM collection_logs ORDER BY id DESC", conn)
-            collection_logs = df_col.to_dict(orient="records")
+            with connexion() as conn:
+                df_col = pd.read_sql("SELECT * FROM collection_logs ORDER BY id DESC", conn)
+                collection_logs = df_col.to_dict(orient="records")
 
-            df_train = pd.read_sql("SELECT * FROM training_logs ORDER BY id DESC", conn)
-            training_logs = df_train.to_dict(orient="records")
-            conn.close()
+                df_train = pd.read_sql("SELECT * FROM training_logs ORDER BY id DESC", conn)
+                training_logs = df_train.to_dict(orient="records")
         except Exception as e:
             print(f"Error reading logs: {e}")
 
@@ -841,20 +860,18 @@ async def backfill_co2(days: int = 30):
         df_co2["co2"] = df_co2["co2"].round(2)
         df_co2["timestamp"] = df_co2["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        with connexion() as conn:
+            cursor = conn.cursor()
 
-        updated_count = 0
-        for _, row in df_co2.iterrows():
-            cursor.execute("""
-                UPDATE metrics
-                SET co2 = ?
-                WHERE timestamp = ? AND (co2 IS NULL)
-            """, (row["co2"], row["timestamp"]))
-            updated_count += cursor.rowcount
+            updated_count = 0
+            for _, row in df_co2.iterrows():
+                cursor.execute("""
+                    UPDATE metrics
+                    SET co2 = ?
+                    WHERE timestamp = ? AND (co2 IS NULL)
+                """, (row["co2"], row["timestamp"]))
+                updated_count += cursor.rowcount
 
-        conn.commit()
-        conn.close()
 
         return {
             "status": "success",
@@ -917,9 +934,8 @@ async def validation_error_page(request: Request, model: str = "ext", filter: st
                     print(f"ML Engine Annotated Metrics unreachable, falling back to local DB: {e}")
 
             if df_metrics.empty:
-                conn = sqlite3.connect(DB_PATH)
-                df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
-                conn.close()
+                with connexion() as conn:
+                    df_metrics = pd.read_sql("SELECT * FROM metrics ORDER BY timestamp ASC", conn)
 
             if not df_metrics.empty:
                 forecast_dict = {}
