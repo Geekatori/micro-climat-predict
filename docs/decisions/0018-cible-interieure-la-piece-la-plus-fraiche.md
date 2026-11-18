@@ -51,7 +51,7 @@ poêle éteint, les deux pièces y étaient à 0,5 °C l'une de l'autre.
 ## Conséquences
 
 - La prévision publiée reste la plus fiable des trois cibles, mais ne parle pas de la pièce
-  où l'on vit l'hiver. La sortie utile pour elle (l'heure où elle passera sous 18 °C poêle
-  éteint) relève de l'apprentissage du poêle.
+  où l'on vit l'hiver. L'heure où celle-ci passera sous 18 °C poêle éteint a été essayée
+  ensuite, et écartée ([décision 0019](0019-poele-regime-regule.md)).
 - Le libellé et l'attribut se mettent à jour à la publication suivante, sans action dans HA.
   Les cartes du tableau de bord qui portent leur propre nom le gardent.

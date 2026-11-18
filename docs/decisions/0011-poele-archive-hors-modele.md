@@ -1,7 +1,7 @@
 # 0011. La puissance du poêle est archivée, sans être lue par le modèle
 
 - **Date** : 23/09/2026
-- **État** : acceptée
+- **État** : acceptée, complétée par la [décision 0019](0019-poele-regime-regule.md) (18/11/2026)
 - **Rouvrir si** : l'archive couvre assez de cycles de chauffe pour écrire un modèle hivernal.
 
 ## Contexte
@@ -25,5 +25,6 @@ Le collecteur archive la puissance du poêle (`STOVE_POWER_ENTITY`, en W) dans l
 
 ## Conséquences
 
-- La prévision intérieure d'hiver ne sait pas encore que le poêle chauffe (voir les limites dans
-  [`architecture.md`](../architecture.md#limites-connues)).
+- Depuis le 18/11/2026, le moteur lit la colonne pour savoir si le poêle a tourné dans les
+  24 dernières heures ([décision 0019](0019-poele-regime-regule.md)) ; le modèle d'inertie,
+  lui, ne la lit toujours pas.

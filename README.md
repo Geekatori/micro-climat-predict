@@ -60,6 +60,7 @@ Les choix propres à ce fork. Chaque fiche dit quand la rouvrir.
 | [0016](docs/decisions/0016-pas-d-ouverture-soleil-bas-en-saison-froide.md) | En saison froide, pas d'ouverture tant que le soleil est sous 10° |
 | [0017](docs/decisions/0017-inertie-recalee-chaque-jour.md) | Le modèle d'inertie s'ajuste sur des simulations recalées chaque jour sur la mesure |
 | [0018](docs/decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md) | La cible intérieure reste la pièce la plus fraîche, et les capteurs publiés le disent |
+| [0019](docs/decisions/0019-poele-regime-regule.md) | Poêle en marche, la prévision revient vers le niveau des 24 dernières heures |
 
 ## Licence
 

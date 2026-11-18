@@ -26,8 +26,10 @@ interne ([décision 0001](decisions/0001-ports-en-boucle-locale.md)).
 - **CO₂** (`CO2_ENTITY`) : collecté, archivé et affiché ; lu par le modèle seulement si
   `CO2_MODELE=1` ([décision 0012](decisions/0012-co2-collecte-hors-modele.md)).
 - **Puissance du poêle** (`stove_power`, en W) : signal en marches, rééchantillonné au maximum
-  par pas et prolongé, jamais interpolé ; archivé, pas lu par le modèle
-  ([décision 0011](decisions/0011-poele-archive-hors-modele.md)).
+  par pas et prolongé, jamais interpolé ; archivé
+  ([décision 0011](decisions/0011-poele-archive-hors-modele.md)), et lu seulement pour savoir
+  si le poêle a tourné dans les 24 dernières heures
+  ([décision 0019](decisions/0019-poele-regime-regule.md)).
 - **Météo et soleil** : historique et prévisions d'Open-Meteo, course du soleil sur `LAT`/`LON`
   (transmis aussi au `ml-engine`).
 - **Qualité de l'air** : lue à la volée par le web-ui chez Open-Meteo, pas archivée
@@ -57,6 +59,11 @@ mesure. Les paramètres sont ajustés sur ces journées recalées, sur tout l'hi
 robustes et dans des bornes qui couvrent une maison réelle
 ([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)). L'erreur journalisée à
 l'entraînement est donc celle d'une prévision à 0 à 24 h.
+
+Poêle en marche dans les 24 dernières heures, le futur ne suit plus l'équation : il revient de
+la dernière mesure vers la moyenne mesurée de ces 24 h, avec une constante de 6 h. Le poêle
+tient la maison dans une bande, une chute passive n'arriverait pas
+([décision 0019](decisions/0019-poele-regime-regule.md)).
 Quand `CO2_MODELE=1`, un détecteur d'ouverture par le CO₂ exclut de l'ajustement les périodes
 fenêtres ouvertes ; son critère s'inverse avec la saison, et son seuil « intérieur chaud » est
 `INT_HOT_THRESHOLD_C` ([décision 0008](decisions/0008-mode-saisonnier.md)).
@@ -100,13 +107,14 @@ en mémoire dans HA et reviennent à la publication suivante après un redémarr
 - En plein hiver l'extérieur ne dépasse jamais l'intérieur : les capteurs d'ouverture et de
   fermeture restent `unknown` des semaines durant. C'est attendu. L'aération d'hygiène
   relèverait d'une règle distincte, non écrite.
-- `stove_power` est archivé mais pas encore lu par le modèle. Poêle en marche, la prévision
-  intérieure fait moins bien que la persistance de la dernière mesure
-  ([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)).
+- Le modèle ne simule pas le poêle : poêle en marche, la prévision revient vers le niveau des
+  24 dernières heures, sans les oscillations de chaque cycle
+  ([décision 0019](decisions/0019-poele-regime-regule.md)).
 - La cible du modèle intérieur est `int_temp_min`, le minimum des sondes intérieures : poêle en
   marche, c'est le plus souvent la sonde la plus éloignée du poêle. Les capteurs publiés le
-  disent ; la pièce du poêle attend que le modèle apprenne la chauffe
-  ([décision 0018](decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md)).
+  disent ([décision 0018](decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md)). La
+  pièce du poêle n'a pas de prévision propre : poêle éteint, son heure de passage sous 18 °C
+  se prévoit à 2 h près seulement ([décision 0019](decisions/0019-poele-regime-regule.md)).
 - L'heure locale d'affichage est `Europe/Paris`, en dur dans le moteur et l'interface (hérité
   de l'amont).
 - Sans identifiant unique, les entités publiées dans HA ne sont ni renommables ni rattachables à

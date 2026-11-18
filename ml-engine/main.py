@@ -337,7 +337,47 @@ def _simulate_inputs(inp: dict, a: float, b: float, c: float, d: float, e: float
 def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e: float) -> np.ndarray:
     if len(df) == 0:
         return np.full(0, np.nan)
-    return _simulate_inputs(_inertia_inputs(df), a, b, c, d, e)[0]
+    return _regulated_future(df, _simulate_inputs(_inertia_inputs(df), a, b, c, d, e)[0])
+
+
+# Régime régulé (décision 0019). Le poêle se comporte en thermostat : il repart quand la pièce
+# chauffée descend vers 18 °C et s'arrête vers 21 °C. Tant qu'il tourne, l'intérieur oscille
+# autour d'un niveau stable, que le modèle physique (qui ignore le poêle à venir) ne voit pas.
+POELE_EN_MARCHE_W = 5.0
+REGIME_REGULE_H = 24
+REGIME_REGULE_TAU_H = 6.0
+
+
+def _regulated_future(df: pd.DataFrame, T_est: np.ndarray) -> np.ndarray:
+    """Futur ramené vers la moyenne des 24 dernières heures si le poêle a tourné dans ce délai.
+
+    Prévision : M + (T0 - M)·exp(-t / 6 h), M la moyenne mesurée de la cible sur 24 h, T0 la
+    dernière mesure. Rejouée sur les semaines de chauffe, elle bat la persistance et le modèle
+    physique. Le passé (validation, graphes) reste la simulation recalée.
+    """
+    if "stove_power" not in df.columns or "int_temp_min" not in df.columns:
+        return T_est
+    timestamps = pd.to_datetime(df["timestamp"])
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    past = (timestamps <= now).to_numpy()
+    future = ~past
+    if not future.any():
+        return T_est
+    recent = past & (timestamps > now - timedelta(hours=REGIME_REGULE_H)).to_numpy()
+    stove = pd.to_numeric(df["stove_power"], errors="coerce").to_numpy(dtype=float)
+    if not np.any(stove[recent] > POELE_EN_MARCHE_W):
+        return T_est
+    measured = pd.to_numeric(df["int_temp_min"], errors="coerce").to_numpy(dtype=float)
+    # Au moins la moitié des pas de la fenêtre, sinon la moyenne ne dit rien du régime.
+    if np.count_nonzero(~np.isnan(measured[recent])) < REGIME_REGULE_H * 3:
+        return T_est
+    known = np.where(past & ~np.isnan(measured))[0]
+    last = known[-1]
+    level = float(np.nanmean(measured[recent]))
+    hours = (timestamps[future] - timestamps.iloc[last]).dt.total_seconds().to_numpy() / 3600.0
+    out = np.array(T_est, dtype=float, copy=True)
+    out[future] = level + (measured[last] - level) * np.exp(-hours / REGIME_REGULE_TAU_H)
+    return out
 
 
 # Bornes de l'ajustement d'inertie (a, b, c, d, e), par pas de 10 min. a couvre une constante

@@ -56,6 +56,8 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   larges, au lieu d'une grille dont le couplage à l'extérieur plafonnait à plus de 400 jours de
   constante de temps. La simulation libre de l'amont dérivait de plusieurs degrés et gelait les
   paramètres ([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)).
+- **Poêle en marche, prévision ramenée au niveau des 24 dernières heures** au lieu de la chute
+  passive du modèle ([décision 0019](decisions/0019-poele-regime-regule.md)).
 - **État courant du conseil jugé sur la mesure**, pas sur la simulation du passé
   ([décision 0010](decisions/0010-etat-courant-sur-la-mesure.md)).
 
