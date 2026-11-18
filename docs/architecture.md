@@ -104,7 +104,9 @@ en mémoire dans HA et reviennent à la publication suivante après un redémarr
   intérieure fait moins bien que la persistance de la dernière mesure
   ([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)).
 - La cible du modèle intérieur est `int_temp_min`, le minimum des sondes intérieures : poêle en
-  marche, c'est le plus souvent la sonde la plus éloignée du poêle.
+  marche, c'est le plus souvent la sonde la plus éloignée du poêle. Les capteurs publiés le
+  disent ; la pièce du poêle attend que le modèle apprenne la chauffe
+  ([décision 0018](decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md)).
 - L'heure locale d'affichage est `Europe/Paris`, en dur dans le moteur et l'interface (hérité
   de l'amont).
 - Sans identifiant unique, les entités publiées dans HA ne sont ni renommables ni rattachables à

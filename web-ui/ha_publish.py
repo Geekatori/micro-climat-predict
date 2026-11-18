@@ -19,6 +19,9 @@ HA_URL = os.getenv("HA_URL", "").rstrip("/")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 ML_ENGINE_URL = os.getenv("ML_ENGINE_URL", "http://ml-engine:8000")
 PREFIX = os.getenv("HA_SENSOR_PREFIX", "micro_climat")
+# Ce que prévoient les deux capteurs intérieurs : le minimum des sondes, pas une pièce fixe.
+# Poêle en marche, c'est la sonde la plus éloignée du poêle (décision 0018).
+CIBLE = "minimum des sondes intérieures (pièce la plus fraîche)"
 
 # Horizon de la valeur ponctuelle publiée, et tolérance d'appariement.
 HORIZON_HOURS = int(os.getenv("HA_PUBLISH_HORIZON_HOURS", 6))
@@ -155,11 +158,12 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
             "entity_id": f"sensor.{PREFIX}_interieur_dans_{HORIZON_HOURS}h",
             "state": round(horizon_val, 1) if horizon_val is not None else "unknown",
             "attributes": {
-                "friendly_name": f"Température intérieure prévue dans {HORIZON_HOURS} h",
+                "friendly_name": f"Pièce la plus fraîche, prévue dans {HORIZON_HOURS} h",
                 "unit_of_measurement": "°C",
                 "device_class": "temperature",
                 "icon": "mdi:home-thermometer-outline",
                 "attribution": ATTRIBUTION,
+                "cible": CIBLE,
                 "horodatage_prevision": horizon_dt.isoformat() if horizon_dt else None,
             },
         },
@@ -167,11 +171,12 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
             "entity_id": f"sensor.{PREFIX}_interieur_max_24h",
             "state": round(max_val, 1) if max_val is not None else "unknown",
             "attributes": {
-                "friendly_name": "Maximum intérieur prévu sur 24 h",
+                "friendly_name": "Pièce la plus fraîche, maximum prévu sur 24 h",
                 "unit_of_measurement": "°C",
                 "device_class": "temperature",
                 "icon": "mdi:thermometer-high",
                 "attribution": ATTRIBUTION,
+                "cible": CIBLE,
                 "horodatage_maximum": max_dt.isoformat() if max_dt else None,
             },
         },

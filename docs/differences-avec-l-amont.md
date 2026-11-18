@@ -66,6 +66,8 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   chaque saison ([décision 0009](decisions/0009-hysteresis-par-saison.md)) et pas d'ouverture
   soleil bas en saison froide ([décision 0016](decisions/0016-pas-d-ouverture-soleil-bas-en-saison-froide.md)).
 - **Publication des prédictions dans HA** ([décision 0006](decisions/0006-publication-ha-par-l-api-rest.md)).
+  Les capteurs intérieurs nomment leur cible, la pièce la plus fraîche
+  ([décision 0018](decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md)).
 - **CO₂ collecté, archivé et affiché**, lu par le modèle seulement si `CO2_MODELE=1`
   ([décision 0012](decisions/0012-co2-collecte-hors-modele.md)).
 - **Puissance du poêle archivée** (`stove_power`, en W) pour un futur modèle hivernal

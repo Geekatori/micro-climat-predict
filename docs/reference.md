@@ -96,8 +96,8 @@ la main par `POST /api/publish-ha` ([décision 0006](decisions/0006-publication-
 |---|---|
 | `sensor.<prefix>_ouverture_fenetres` | heure d'ouverture conseillée (`device_class: timestamp`) ; attributs `mode_saison`, `creneau_en_cours` |
 | `sensor.<prefix>_fermeture_fenetres` | heure de fermeture conseillée ; attribut `mode_saison` |
-| `sensor.<prefix>_interieur_dans_6h` | température intérieure prévue à `HA_PUBLISH_HORIZON_HOURS` |
-| `sensor.<prefix>_interieur_max_24h` | maximum intérieur prévu sur 24 h, horaire du pic en attribut |
+| `sensor.<prefix>_interieur_dans_6h` | température de la pièce la plus fraîche (`int_temp_min`) prévue à `HA_PUBLISH_HORIZON_HOURS` ; attribut `cible` |
+| `sensor.<prefix>_interieur_max_24h` | maximum prévu sur 24 h pour la même cible, horaire du pic et `cible` en attributs |
 
 Les horodatages du moteur sont en UTC naïf et convertis en ISO 8601 avec fuseau avant
 publication. Sans donnée exploitable, la publication est sautée plutôt que d'écraser les états

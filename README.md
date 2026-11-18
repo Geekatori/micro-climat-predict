@@ -59,6 +59,7 @@ Les choix propres à ce fork. Chaque fiche dit quand la rouvrir.
 | [0015](docs/decisions/0015-les-pannes-se-voient.md) | Les pannes se voient : collecte en 502, entités muettes journalisées, route de fraîcheur |
 | [0016](docs/decisions/0016-pas-d-ouverture-soleil-bas-en-saison-froide.md) | En saison froide, pas d'ouverture tant que le soleil est sous 10° |
 | [0017](docs/decisions/0017-inertie-recalee-chaque-jour.md) | Le modèle d'inertie s'ajuste sur des simulations recalées chaque jour sur la mesure |
+| [0018](docs/decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md) | La cible intérieure reste la pièce la plus fraîche, et les capteurs publiés le disent |
 
 ## Licence
 
