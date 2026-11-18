@@ -55,5 +55,6 @@ erreur absolue moyenne sur 0 à 24 h, paramètres déployés :
   supprimées, plus de fermeture annoncée à 01h00 le 06/11.
 - Le jour où le poêle est arrêté pour de bon, la prévision tient le niveau des 24 h jusqu'à ce
   que le dernier pas de marche sorte de la fenêtre, puis repasse au modèle d'inertie.
-- Le moteur interpole `stove_power` dans les trous, ce que le collecteur évitait (décision
-  0011) ; sans effet ici, où seul compte "plus de 5 W au moins une fois en 24 h".
+- Le moteur interpolait `stove_power` dans les trous, ce que le collecteur évitait (décision
+  0011) ; sans effet ici, où seul compte "plus de 5 W au moins une fois en 24 h". Corrigé
+  le même jour : la colonne n'est plus interpolée.

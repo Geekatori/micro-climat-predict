@@ -75,6 +75,9 @@ EXT_FENETRE_JOURS = 30
 EXT_RAPPEL_H = 3.0
 FEATURES_INT = FEATURES_BASE + ["int_temp_lag1"]
 
+# Colonnes laissées sans interpolation entre deux relevés.
+NON_INTERPOLEES = ("stove_power",)
+
 def add_autoregressive_lags(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("timestamp").copy()
 
@@ -110,14 +113,21 @@ def clear_caches():
     _smart_json_cache["json"] = None
 
 def get_season_mode() -> str:
-    """Mode saisonnier courant. Fichier absent ou illisible : « chaud », le comportement d'origine."""
+    """Mode saisonnier courant. Fichier absent : "chaud", le comportement d'origine.
+
+    Un fichier présent mais illisible retombe aussi sur "chaud", mais le journal le dit : en
+    plein hiver, ce repli conseillerait d'évacuer la chaleur sans que rien ne l'explique.
+    """
+    if not os.path.exists(SEASON_PATH):
+        return DEFAULT_SEASON
     try:
         with open(SEASON_PATH) as handle:
             mode = json.load(handle).get("mode")
         if mode in SEASON_MODES:
             return mode
-    except (OSError, ValueError, AttributeError):
-        pass
+        print(f"[{datetime.now()}] {SEASON_PATH} : mode inconnu {mode!r}, repli sur {DEFAULT_SEASON}")
+    except (OSError, ValueError, AttributeError) as exc:
+        print(f"[{datetime.now()}] {SEASON_PATH} illisible ({type(exc).__name__}), repli sur {DEFAULT_SEASON}")
     return DEFAULT_SEASON
 
 
@@ -562,7 +572,14 @@ def load_and_prepare_data() -> pd.DataFrame:
     # Sinon les lignes de prévision météo, plus récentes que toute mesure, recevaient la
     # dernière mesure recopiée ; remove_constant_blocks n'en effaçait qu'à partir du 24e pas,
     # et les 3 h 40 restantes entraient dans l'entraînement comme des relevés.
-    df = df.resample("10min").mean().interpolate(method="linear", limit_area="inside").reset_index()
+    df = df.resample("10min").mean()
+    # stove_power reste tel que collecté : un trou de relevé ne dit pas que le poêle tournait
+    # (décision 0011). Le régime régulé (décision 0019) ne lit que "plus de 5 W en 24 h".
+    brutes = [c for c in NON_INTERPOLEES if c in df.columns]
+    gardees = df[brutes].copy()
+    df = df.interpolate(method="linear", limit_area="inside")
+    df[brutes] = gardees
+    df = df.reset_index()
 
     def remove_constant_blocks(dframe, cols=["ext_temp", "int_temp_min"], window=24):
         dframe = dframe.copy()
@@ -683,17 +700,22 @@ def train_models():
         X_int_clean, y_int_delta_clean, test_size=0.2, random_state=42, shuffle=False
     )
 
-    model_int_ml = HistGradientBoostingRegressor(
-        max_iter=150, learning_rate=0.05, max_depth=7, random_state=42
-    )
-    model_int_ml.fit(X_tr_int, y_tr_int_delta)
+    def int_regressor():
+        return HistGradientBoostingRegressor(
+            max_iter=150, learning_rate=0.05, max_depth=7, random_state=42
+        )
 
-    # Recalculate RMSE on absolute temperatures to keep a coherent metric
+    model_int_ml = int_regressor().fit(X_tr_int, y_tr_int_delta)
+
+    # RMSE sur les températures reconstituées, mesurée sur les 20 % récents non vus.
     delta_preds_int_te = model_int_ml.predict(X_te_int)
     reconstructed_int_preds = X_te_int["int_temp_lag1"] + delta_preds_int_te
     actual_int_temps = X_te_int["int_temp_lag1"] + y_te_int_delta
     rmse_int_gb = float(np.sqrt(mean_squared_error(actual_int_temps, reconstructed_int_preds)))
 
+    # Puis réentraîné sur tout, comme le modèle extérieur : sinon il ignorait les deux ou
+    # trois dernières semaines.
+    model_int_ml = int_regressor().fit(X_int_clean, y_int_delta_clean)
     joblib.dump(model_int_ml, MODEL_INT_RF_PATH)
 
     # Modèle d'inertie : ajusté sur des simulations recalées chaque jour, sur tout le passé
@@ -974,8 +996,9 @@ async def forecast_analysis():
     closing_time = _within_horizon(advice["closing"])
 
     peak_msg = None
+    # En saison froide, le pic du jour n'appelle aucun geste : le conseil d'ouverture suffit.
     # is not None : un pic à 0,0 °C est un pic.
-    if peak_info and peak_info.get("peak_temp") is not None and peak_info.get("timestamp"):
+    if advice["mode"] != "froid" and peak_info and peak_info.get("peak_temp") is not None and peak_info.get("timestamp"):
         from zoneinfo import ZoneInfo
         ts_str = str(peak_info["timestamp"])
         dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))

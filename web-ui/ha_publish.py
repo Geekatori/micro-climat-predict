@@ -113,13 +113,13 @@ async def _fetch_predictions(client: httpx.AsyncClient) -> tuple[dict, list, lis
 
 
 def _build_states(analysis: dict, series: list) -> list[dict]:
-    """Construit les quatre états à écrire dans HA."""
+    """Construit les états à écrire dans HA : quatre, ou les deux intérieurs sans analyse."""
     now = datetime.now(timezone.utc)
     points = _series_points(series)
 
     opening_iso = _to_iso_utc(analysis.get("opening_time"))
     closing_iso = _to_iso_utc(analysis.get("closing_time"))
-    mode = analysis.get("season_mode", "chaud")
+    mode = analysis.get("season_mode")
     favorable_now = bool(analysis.get("favorable_now"))
 
     # Le libellé suit la saison ; le nom d'entité ne bouge pas, les automatisations le nomment.
@@ -128,7 +128,7 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
     horizon_val, horizon_dt = _value_at_horizon(points, now, HORIZON_HOURS)
     max_val, max_dt = _max_over(points, now, 24)
 
-    return [
+    states = [
         {
             "entity_id": f"sensor.{PREFIX}_ouverture_fenetres",
             "state": opening_iso or "unknown",
@@ -182,6 +182,12 @@ def _build_states(analysis: dict, series: list) -> list[dict]:
         },
     ]
 
+    # Analyse indisponible : la saison est inconnue. Les deux capteurs de fenêtres gardent
+    # leur état précédent plutôt que de recevoir "unknown" et un libellé d'été en novembre.
+    if mode is None:
+        states = [s for s in states if "_fenetres" not in s["entity_id"]]
+    return states
+
 
 async def publish_predictions() -> dict:
     """Publie les prédictions dans HA. Ne lève jamais : renvoie un compte rendu."""
@@ -191,7 +197,8 @@ async def publish_predictions() -> dict:
     headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
     written, errors = [], []
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    # Au-delà des 30 s que le moteur peut attendre SQLite pendant une collecte.
+    async with httpx.AsyncClient(timeout=45.0) as client:
         analysis, series, errors_pred = await _fetch_predictions(client)
         errors.extend(errors_pred)
 

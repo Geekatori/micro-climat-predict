@@ -51,6 +51,16 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   saison froide ([décision 0020](decisions/0020-modele-exterieur-direct-sur-30-jours.md)).
 - **Pic extérieur à 0 °C annoncé** : un pic à 0,0 °C était lu comme absent et le message de
   pic disparaissait.
+- **Pic extérieur tu en saison froide** : le bandeau l'annonçait chaque matin sans conseil
+  associé.
+- **Plus de repli silencieux sur la saison chaude** : un `season.json` illisible est journalisé ;
+  sans analyse, la publication laisse les capteurs de fenêtres en l'état au lieu d'y écrire
+  `mode_saison: chaud`, et `/admin` affiche "Mode illisible" au lieu de cocher l'été. Le
+  web-ui attend le moteur plus longtemps que le délai SQLite de celui-ci (30 s).
+- **Modèle intérieur à gradient réentraîné sur tout l'historique** après sa mesure sur les
+  20 % récents, comme le modèle extérieur ; il ignorait les dernières semaines.
+- **`stove_power` n'est plus interpolé par le moteur** entre deux relevés, comme le collecteur
+  l'évitait déjà ([décision 0011](decisions/0011-poele-archive-hors-modele.md)).
 - **`/api/forecast/smart` n'écrit plus dans le cache de simulation** : il travaille sur une
   copie, les autres routes ne voient plus ses prédictions court terme.
 - **Simulation d'inertie depuis le début des données**, et non depuis le premier relevé de CO₂

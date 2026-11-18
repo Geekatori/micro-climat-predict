@@ -389,16 +389,20 @@ async def admin_dashboard(request: Request):
 
     return templates.TemplateResponse(request, "admin.html", context)
 
-async def fetch_season_mode() -> str:
-    """Mode saisonnier courant. Le moteur en est seul dépositaire."""
+async def fetch_season_mode() -> str | None:
+    """Mode saisonnier courant. Le moteur en est seul dépositaire.
+
+    Moteur injoignable : None, et la page le dit, plutôt qu'un "chaud" présenté comme réglé.
+    Le moteur sert ses calculs dans sa boucle : pendant une simulation, il répond en retard.
+    """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"{ML_ENGINE_URL}/api/season")
             if resp.status_code == 200:
-                return resp.json().get("mode", "chaud")
+                return resp.json().get("mode")
     except Exception as exc:
         print(f"Lecture du mode saisonnier impossible : {exc}")
-    return "chaud"
+    return None
 
 
 # Les déclencheurs sont en POST : un GET (lien préchargé, balise <img> d'une page visitée
@@ -786,7 +790,8 @@ def health_freshness():
 async def get_analysis():
     data = {}
     errors = []
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    # Au-delà de DB_TIMEOUT : le moteur peut attendre SQLite 30 s pendant une collecte.
+    async with httpx.AsyncClient(timeout=DB_TIMEOUT + 15) as client:
         try:
             resp = await client.get(f"{ML_ENGINE_URL}/api/forecast/analysis")
             if resp.status_code == 200:
@@ -808,7 +813,8 @@ async def get_analysis():
     return {
         "inversion_time": as_utc_iso(data.get("opening_time")),
         "closing_time": as_utc_iso(data.get("closing_time")),
-        "season_mode": data.get("season_mode", "chaud"),
+        # Analyse indisponible : pas de saison, plutôt qu'un "chaud" inventé.
+        "season_mode": data.get("season_mode"),
         "favorable_now": bool(data.get("favorable_now")),
         "peak_message": data.get("peak_message"),
         "_debug_errors": errors

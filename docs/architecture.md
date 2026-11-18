@@ -79,7 +79,10 @@ fenêtres ouvertes ; son critère s'inverse avec la saison, et son seuil « int�
 - **Le sens** dépend du mode saisonnier : en saison chaude on ouvre quand l'extérieur repasse
   sous l'intérieur, en saison froide quand il passe au-dessus. Le mode se règle depuis `/admin`,
   vit dans `data/season.json`, et sa bascule vide les caches de prévision
-  ([décision 0008](decisions/0008-mode-saisonnier.md)).
+  ([décision 0008](decisions/0008-mode-saisonnier.md)). Fichier absent : saison chaude, comme
+  l'amont ; fichier illisible : saison chaude aussi, mais le journal du moteur le dit.
+- **Le pic extérieur** du jour n'est annoncé qu'en saison chaude : en saison froide, il
+  n'appelle aucun geste.
 - **Deux instants** sont calculés, ouverture puis fermeture, sur un horizon de 18 h. Quand
   l'extérieur est déjà favorable, seule la fermeture est annoncée : l'ouverture vaut `unknown`
   avec `creneau_en_cours: true`.

@@ -101,7 +101,8 @@ la main par `POST /api/publish-ha` ([décision 0006](decisions/0006-publication-
 
 Les horodatages du moteur sont en UTC naïf et convertis en ISO 8601 avec fuseau avant
 publication. Sans donnée exploitable, la publication est sautée plutôt que d'écraser les états
-par `unknown`.
+par `unknown`. Sans l'analyse du moteur, seuls les deux capteurs intérieurs sont écrits : la
+saison est alors inconnue, et l'ouverture et la fermeture gardent leur état précédent.
 
 ## La route de fraîcheur
 
