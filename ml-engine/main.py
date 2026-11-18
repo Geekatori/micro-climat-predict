@@ -538,6 +538,10 @@ def get_cached_simulation_df() -> pd.DataFrame:
 async def startup_event():
     init_db()
 
+# Le moins de lignes pour entraîner un modèle : de quoi garder au moins une ligne de test.
+MIN_LIGNES_TRAIN = 10
+
+
 @app.post("/api/train")
 def train_models():
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -550,7 +554,9 @@ def train_models():
     # Le modèle extérieur n'apprend que sur une mesure réelle (voir ext_mesure) ; les
     # autres usages gardent ext_temp rempli par Open-Meteo.
     df_ext = df_clean.dropna(subset=["ext_mesure", "meteo_temp"])
-    if df_ext.empty:
+    # Un découpage 80/20 sur une ou deux lignes laisse un jeu vide, et train_test_split lève une
+    # ValueError (500) : le cas d'une sonde extérieure morte juste après un reset. Un 400 le dit.
+    if len(df_ext) < MIN_LIGNES_TRAIN:
         raise HTTPException(status_code=400, detail="Not enough valid exterior measurements after cleaning.")
 
     X_ext = df_ext[FEATURES_EXT]
@@ -578,6 +584,8 @@ def train_models():
     valid_mask = y_int_delta.notna()
     X_int_clean = X_int[valid_mask]
     y_int_delta_clean = y_int_delta[valid_mask]
+    if len(y_int_delta_clean) < MIN_LIGNES_TRAIN:
+        raise HTTPException(status_code=400, detail="Not enough valid interior data after cleaning.")
 
     # Split using the cleaned data
     X_tr_int, X_te_int, y_tr_int_delta, y_te_int_delta = train_test_split(
