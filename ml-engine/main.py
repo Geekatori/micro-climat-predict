@@ -76,7 +76,7 @@ EXT_RAPPEL_H = 3.0
 FEATURES_INT = FEATURES_BASE + ["int_temp_lag1"]
 
 # Colonnes laissées sans interpolation entre deux relevés.
-NON_INTERPOLEES = ("stove_power",)
+NON_INTERPOLEES = ("stove_power", "window_open")
 
 def add_autoregressive_lags(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("timestamp").copy()
@@ -262,6 +262,12 @@ def add_behavioral_features(df: pd.DataFrame, mode: str | None = None) -> pd.Dat
 
         co2_high = (df["co2"] > 900).fillna(False)
         df["is_fit_ready"] = ((df["window_open_flag"] == 0) & co2_high).astype(int)
+
+    # Un détecteur d'ouverture collecté (WINDOW_ENTITY) l'emporte sur la détection par le CO₂
+    # là où il a une valeur (décision 0021). Ailleurs, le CO₂ ou rien.
+    if "window_open" in df.columns:
+        detecte = df["window_open"].notna()
+        df.loc[detecte, "window_open_flag"] = (df.loc[detecte, "window_open"] > 0.5).astype(int)
 
     df.loc[df["is_fit_ready"] == 1, "thermal_mode"] = 1
     df.loc[df["window_open_flag"] == 1, "thermal_mode"] = 3

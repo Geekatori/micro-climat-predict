@@ -88,6 +88,9 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   ([décision 0012](decisions/0012-co2-collecte-hors-modele.md)).
 - **Puissance du poêle archivée** (`stove_power`, en W) pour un futur modèle hivernal
   ([décision 0011](decisions/0011-poele-archive-hors-modele.md)).
+- **Détecteur d'ouverture collecté** (`WINDOW_ENTITY`, colonne `window_open`) : il donne le
+  drapeau de fenêtre ouverte, que l'amont tirait du CO₂
+  ([décision 0021](decisions/0021-detecteur-d-ouverture-comme-drapeau-de-fenetre.md)).
 - **Qualité de l'air par Open-Meteo** au lieu de `PM25_ENTITY` / `PM10_ENTITY`
   ([décision 0007](decisions/0007-qualite-de-l-air-par-open-meteo.md)).
 

@@ -50,6 +50,7 @@ services:
       - COR_HUM_ENTITY=${COR_HUM_ENTITY}
       - CO2_ENTITY=${CO2_ENTITY:-}
       - STOVE_POWER_ENTITY=${STOVE_POWER_ENTITY:-}
+      - WINDOW_ENTITY=${WINDOW_ENTITY:-}
     healthcheck: *healthcheck
 
   ml-engine:

@@ -30,6 +30,10 @@ interne ([décision 0001](decisions/0001-ports-en-boucle-locale.md)).
   ([décision 0011](decisions/0011-poele-archive-hors-modele.md)), et lu seulement pour savoir
   si le poêle a tourné dans les 24 dernières heures
   ([décision 0019](decisions/0019-poele-regime-regule.md)).
+- **Fenêtre ouverte** (`WINDOW_ENTITY`, colonne `window_open`) : un détecteur d'ouverture, en
+  marches comme le poêle. Là où il a une valeur, il fait le drapeau de fenêtre ouverte, à la
+  place de la détection par le CO₂
+  ([décision 0021](decisions/0021-detecteur-d-ouverture-comme-drapeau-de-fenetre.md)).
 - **Météo et soleil** : historique et prévisions d'Open-Meteo, course du soleil sur `LAT`/`LON`
   (transmis aussi au `ml-engine`).
 - **Qualité de l'air** : lue à la volée par le web-ui chez Open-Meteo, pas archivée
@@ -110,8 +114,9 @@ en mémoire dans HA et reviennent à la publication suivante après un redémarr
   d'ouverture viennent de la maison de l'amont, et marquent des heures de fausses ouvertures en
   saison froide. Les recaler sur quelques semaines de vrais relevés avant d'activer
   ([décision 0012](decisions/0012-co2-collecte-hors-modele.md)).
-- Tant que le CO₂ n'est pas lu, pas de détection d'ouverture : le modèle d'inertie ne distingue
-  pas les périodes fenêtres ouvertes, ce qui dégrade la prévision intérieure en été.
+- Sans détecteur d'ouverture (`WINDOW_ENTITY`) ni CO₂ lu, le modèle d'inertie ne distingue pas
+  les périodes fenêtres ouvertes, ce qui dégrade la prévision intérieure en été. Le détecteur ne
+  couvre qu'une fenêtre ; son archive commence à sa mise en service, dix jours plus tôt au mieux.
 - La branche froide du détecteur CO₂ n'a jamais tourné sur des données réelles.
 - En plein hiver l'extérieur ne dépasse jamais l'intérieur : les capteurs d'ouverture et de
   fermeture restent `unknown` des semaines durant. C'est attendu. L'aération d'hygiène

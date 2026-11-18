@@ -1,7 +1,7 @@
 # 0012. Le CO₂ est collecté, mais le modèle ne le lit pas (`CO2_MODELE=0`)
 
 - **Date** : 15/10/2026
-- **État** : acceptée
+- **État** : acceptée, complétée par la [décision 0021](0021-detecteur-d-ouverture-comme-drapeau-de-fenetre.md) (18/11/2026)
 - **Rouvrir si** : quelques semaines de vrais relevés de CO₂ ont permis de recaler les seuils de
   détection d'ouverture sur cette maison.
 
@@ -28,4 +28,5 @@ ne le lit que si `CO2_MODELE=1` ; le défaut est `0`.
 ## Conséquences
 
 - Tant que le CO₂ n'est pas lu, pas de détection d'ouverture : le modèle d'inertie ne distingue
-  pas les périodes fenêtres ouvertes, ce qui dégrade la prévision intérieure en été.
+  pas les périodes fenêtres ouvertes, ce qui dégrade la prévision intérieure en été. Un
+  détecteur d'ouverture y pourvoit depuis la décision 0021.

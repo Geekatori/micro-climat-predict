@@ -33,7 +33,14 @@ _ENTITY_ENV = {
     # Puissance de la prise du poêle, en W : repère les périodes de chauffe à masquer
     # lors de l'ajustement d'un futur modèle hivernal.
     "stove_power": ("STOVE_POWER_ENTITY", ""),
+    # Détecteur d'ouverture d'une fenêtre (binary_sensor, on = ouverte), archivé en 1/0 :
+    # drapeau de fenêtre ouverte du modèle d'inertie, à la place de la détection par le CO₂.
+    "window_open": ("WINDOW_ENTITY", ""),
 }
+# Capteurs à états (marches) : jamais interpolés, chaque pas garde son maximum.
+STEP_SENSORS = ("stove_power", "window_open")
+# Valeurs d'un binary_sensor ; unavailable et unknown sont ignorés comme un relevé illisible.
+BINARY_STATES = {"on": 1.0, "off": 0.0}
 ENTITIES = {
     key: os.getenv(var, default).strip()
     for key, (var, default) in _ENTITY_ENV.items()
@@ -49,7 +56,7 @@ INDOOR_SENSORS = ["int_temp", "cor_temp"]
 
 METRIC_COLUMNS = [
     "ext_temp", "ext_hum", "int_temp", "int_hum", "cor_temp", "cor_hum", "co2", "stove_power",
-    "meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation", "int_temp_min",
+    "window_open", "meteo_temp", "meteo_hum", "wind_speed", "cloud_cover", "direct_radiation", "int_temp_min",
 ]
 
 _db_cache = {}
@@ -97,6 +104,10 @@ def migrate_db(conn):
         conn.execute("ALTER TABLE metrics ADD COLUMN stove_power REAL")
         print("Migration: Added 'stove_power' column to metrics table.")
 
+    if "window_open" not in columns:
+        conn.execute("ALTER TABLE metrics ADD COLUMN window_open REAL")
+        print("Migration: Added 'window_open' column to metrics table.")
+
     if "cloud_cover" not in columns:
         conn.execute("ALTER TABLE metrics ADD COLUMN cloud_cover REAL")
         print("Migration: Added 'cloud_cover' column to metrics table.")
@@ -128,6 +139,7 @@ def init_db():
                 cor_hum REAL,
                 co2 REAL,
                 stove_power REAL,
+                window_open REAL,
                 meteo_temp REAL,
                 meteo_hum REAL,
                 wind_speed REAL,
@@ -208,7 +220,8 @@ async def fetch_weather_data_days(days: int):
                         for state in entity_history:
                             try:
                                 dt = datetime.fromisoformat(state["last_updated"])
-                                val = float(state["state"])
+                                raw = state["state"]
+                                val = BINARY_STATES[raw] if key == "window_open" else float(raw)
                                 if not math.isnan(val) and not math.isinf(val): ha_data_dict[key].append([dt, val])
                             except: continue
                 ha_ok = True
@@ -293,12 +306,13 @@ async def run_collection(days: int = None):
             if data:
                 df = pd.DataFrame(data, columns=["timestamp", key])
                 df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert("UTC").dt.tz_localize(None)
-                if key == "stove_power":
-                    # La prise ne publie qu'aux changements : signal en marches, à ne pas
-                    # interpoler. Chaque pas vaut le max entre ses propres relevés (pics
-                    # d'allumage) et le dernier relevé du pas précédent (pas son max, sinon un
-                    # pic de cinq minutes serait prolongé). Un pas ajouté en fin de série pour
-                    # que le ffill global prolonge le dernier relevé et non le max du dernier pas.
+                if key in STEP_SENSORS:
+                    # La prise du poêle et le détecteur d'ouverture ne publient qu'aux
+                    # changements : signal en marches, à ne pas interpoler. Chaque pas vaut le
+                    # max entre ses propres relevés (pics d'allumage, ouverture brève) et le
+                    # dernier relevé du pas précédent (pas son max, sinon un pic de cinq
+                    # minutes serait prolongé). Un pas ajouté en fin de série pour que le ffill
+                    # global prolonge le dernier relevé et non le max du dernier pas.
                     steps = df.set_index("timestamp").resample("10min")
                     peaks = steps.max()
                     idx = pd.date_range(peaks.index[0], peaks.index[-1] + pd.Timedelta("10min"), freq="10min", name="timestamp")
@@ -339,11 +353,11 @@ async def run_collection(days: int = None):
                 conn.execute("""
                     INSERT OR IGNORE INTO metrics (
                         timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                        cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
+                        cor_temp, cor_hum, co2, stove_power, window_open, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
                     )
                     SELECT
                         timestamp, ext_temp, ext_hum, int_temp, int_hum,
-                        cor_temp, cor_hum, co2, stove_power, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
+                        cor_temp, cor_hum, co2, stove_power, window_open, meteo_temp, meteo_hum, wind_speed, cloud_cover, direct_radiation, int_temp_min
                     FROM metrics_temp;
                 """)
 
@@ -359,6 +373,7 @@ async def run_collection(days: int = None):
                         cor_hum = COALESCE(metrics_temp.cor_hum, metrics.cor_hum),
                         co2 = COALESCE(metrics_temp.co2, metrics.co2),
                         stove_power = COALESCE(metrics_temp.stove_power, metrics.stove_power),
+                        window_open = COALESCE(metrics_temp.window_open, metrics.window_open),
                         meteo_temp = COALESCE(metrics_temp.meteo_temp, metrics.meteo_temp),
                         meteo_hum = COALESCE(metrics_temp.meteo_hum, metrics.meteo_hum),
                         wind_speed = COALESCE(metrics_temp.wind_speed, metrics.wind_speed),

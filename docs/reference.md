@@ -31,7 +31,8 @@ correspondant. Hors compose, les identifiants de l'amont restent les valeurs par
 | `HA_INTERIOR_TEMP_MIN` | entité affichée sur la page d'accueil (chez l'amont, un capteur template du minimum intérieur) |
 | `CO2_ENTITY` | CO₂ collecté, archivé et affiché ; vide = pas de CO₂ |
 | `CO2_MODELE` | `1` : le modèle d'inertie lit le CO₂ (détection d'ouverture) ; `0` par défaut ([décision 0012](decisions/0012-co2-collecte-hors-modele.md)) |
-| `STOVE_POWER_ENTITY` | puissance du poêle en W, archivée mais pas encore lue par le modèle ([décision 0011](decisions/0011-poele-archive-hors-modele.md)) |
+| `STOVE_POWER_ENTITY` | puissance du poêle en W, archivée ([décision 0011](decisions/0011-poele-archive-hors-modele.md)) ; lue pour savoir si le poêle a tourné dans les 24 h ([décision 0019](decisions/0019-poele-regime-regule.md)) |
+| `WINDOW_ENTITY` | détecteur d'ouverture (`binary_sensor`) archivé dans `window_open` ; donne le drapeau de fenêtre ouverte du modèle d'inertie ; vide = pas de détecteur ([décision 0021](decisions/0021-detecteur-d-ouverture-comme-drapeau-de-fenetre.md)) |
 | `INT_HOT_THRESHOLD_C` | seuil « intérieur chaud » du détecteur CO₂ (23 °C) |
 | `FAVORABLE_MARGIN_CHAUD`, `FAVORABLE_MARGIN_FROID` | hystérésis du conseil d'aération (0,5 et 0,3 °C, [décision 0009](decisions/0009-hysteresis-par-saison.md)) |
 | `SUN_MIN_ELEVATION_FROID` | hauteur minimale du soleil pour une ouverture en saison froide (10°) ; lue par le moteur, absente du compose ([décision 0016](decisions/0016-pas-d-ouverture-soleil-bas-en-saison-froide.md)) |

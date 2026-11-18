@@ -62,6 +62,7 @@ Les choix propres à ce fork. Chaque fiche dit quand la rouvrir.
 | [0018](docs/decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md) | La cible intérieure reste la pièce la plus fraîche, et les capteurs publiés le disent |
 | [0019](docs/decisions/0019-poele-regime-regule.md) | Poêle en marche, la prévision revient vers le niveau des 24 dernières heures |
 | [0020](docs/decisions/0020-modele-exterieur-direct-sur-30-jours.md) | Le modèle extérieur corrige Open-Meteo sans relire sa propre prévision, appris sur 30 jours |
+| [0021](docs/decisions/0021-detecteur-d-ouverture-comme-drapeau-de-fenetre.md) | Un détecteur d'ouverture donne le drapeau de fenêtre ouverte, à la place du CO₂ |
 
 ## Licence
 
