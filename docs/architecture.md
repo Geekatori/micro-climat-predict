@@ -46,6 +46,12 @@ Une sonde figée (24 pas identiques) est écartée, puis l'extérieur manquant e
 Open-Meteo pour la simulation et le conseil. Le modèle extérieur, lui, n'apprend que sur la
 mesure réelle, gardée avant ce remplissage dans `ext_mesure`.
 
+Le modèle extérieur apprend l'écart entre cette mesure et Open-Meteo, sur les 30 derniers jours,
+sans lire la mesure du pas précédent : il corrige tous les pas d'un coup, passé et futur. Dans le
+futur, l'écart du dernier relevé s'ajoute et s'éteint en 3 h
+([décision 0020](decisions/0020-modele-exterieur-direct-sur-30-jours.md)). Il reste un biais
+d'environ +0,4 °C, surtout la nuit.
+
 ## Le modèle d'inertie
 
 Le modèle d'inertie est une équation pas à pas : à chaque pas de 10 minutes, l'intérieur se

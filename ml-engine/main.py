@@ -66,7 +66,13 @@ FEATURES_BASE = [
     "sun_elevation_lag1", "sun_elevation_lag6", "sun_elevation_lag12"
 ]
 
-FEATURES_EXT = FEATURES_BASE + ["ext_temp_lag1"]
+# Le modèle extérieur ne lit plus la mesure du pas précédent (décision 0020) : dans le futur,
+# il se nourrissait de ses propres prévisions, et l'écart du moment se prolongeait sur 24 h.
+FEATURES_EXT = list(FEATURES_BASE)
+# Il apprend sur les derniers jours seulement : l'écart entre la sonde et Open-Meteo dérive
+# avec la saison. Le futur part de l'écart mesuré au dernier pas, qui s'efface en quelques heures.
+EXT_FENETRE_JOURS = 30
+EXT_RAPPEL_H = 3.0
 FEATURES_INT = FEATURES_BASE + ["int_temp_lag1"]
 
 def add_autoregressive_lags(df: pd.DataFrame) -> pd.DataFrame:
@@ -447,59 +453,47 @@ def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFra
     past_mask = timestamps <= now
     future_mask = timestamps > now
 
-    # 1. PAST: Vectorized block (instantaneous, no slow loop)
+    # Extérieur, passé et futur d'un seul tenant : Open-Meteo + écart appris.
+    ext_known = df["meteo_temp"].notna()
+    if ext_known.any():
+        delta = model_ext.predict(df.loc[ext_known, FEATURES_EXT])
+        df.loc[ext_known, "predicted_ext_temp"] = df.loc[ext_known, "meteo_temp"] + delta
+
+    # Futur : l'écart entre la dernière mesure et sa prévision s'efface en EXT_RAPPEL_H.
+    measured = df["ext_mesure"] if "ext_mesure" in df.columns else df["ext_temp"]
+    last_idx = measured[past_mask].last_valid_index()
+    if last_idx is not None and future_mask.any():
+        r0 = float(measured[last_idx] - df.loc[last_idx, "predicted_ext_temp"]) \
+            if pd.notna(df.loc[last_idx, "predicted_ext_temp"]) else 0.0
+        hours = (timestamps[future_mask] - timestamps[last_idx]).dt.total_seconds().to_numpy() / 3600.0
+        df.loc[future_mask, "predicted_ext_temp"] += r0 * np.exp(-hours / EXT_RAPPEL_H)
+    # Le futur de ext_temp est la prévision : le conseil et le modèle d'inertie la lisent.
+    fill = future_mask & df["predicted_ext_temp"].notna()
+    df.loc[fill, "ext_temp"] = df.loc[fill, "predicted_ext_temp"]
+
+    if model_int is None:
+        return df
+
+    # Intérieur, modèle ML : vectorisé sur le passé, pas à pas sur 36 h de futur.
     if not df[past_mask].empty:
-        ext_past_feat = df.loc[past_mask, FEATURES_EXT]
-        if not ext_past_feat.isna().any(axis=1).all():
-            delta_ext_past = model_ext.predict(ext_past_feat)
-            df.loc[past_mask, "predicted_ext_temp"] = df.loc[past_mask, "meteo_temp"] + delta_ext_past
+        int_past_feat = df.loc[past_mask, FEATURES_INT]
+        # CORRECTION : On ajoute le delta prédit au lag passé
+        delta_int_past = model_int.predict(int_past_feat)
+        df.loc[past_mask, "predicted_int_temp_gb"] = df.loc[past_mask, "int_temp_lag1"] + delta_int_past
 
-        if model_int is not None:
-            int_past_feat = df.loc[past_mask, FEATURES_INT]
-            # CORRECTION : On ajoute le delta prédit au lag passé
-            delta_int_past = model_int.predict(int_past_feat)
-            df.loc[past_mask, "predicted_int_temp_gb"] = df.loc[past_mask, "int_temp_lag1"] + delta_int_past
-
-    # 2. FUTURE: Recursive loop only on the future part
-    future_indices = df[future_mask].index
+    future_indices = df[future_mask & (timestamps <= int_cutoff_time)].index
     if len(future_indices) > 0:
-        last_ext = df.loc[past_mask, "ext_temp"].dropna().iloc[-1] if not df.loc[past_mask, "ext_temp"].dropna().empty else 20.0
-        last_int = df.loc[past_mask, "int_temp_min"].dropna().iloc[-1] if not df.loc[past_mask, "int_temp_min"].dropna().empty else 20.0
-
-        current_ext_lag = last_ext
-        current_int_lag = last_int
-
+        known_int = df.loc[past_mask, "int_temp_min"].dropna()
+        current_int_lag = known_int.iloc[-1] if not known_int.empty else 20.0
         for idx in future_indices:
-            current_ts = timestamps[idx]
-
-            # Exterior prediction (runs for the entire future)
-            df.loc[idx, "ext_temp_lag1"] = current_ext_lag
-            row_ext = df.loc[[idx], FEATURES_EXT]
-
+            df.loc[idx, "int_temp_lag1"] = current_int_lag
             try:
-                delta_ext = model_ext.predict(row_ext)[0]
-                pred_ext = df.loc[idx, "meteo_temp"] + delta_ext
-            except:
-                pred_ext = current_ext_lag
-
-            df.loc[idx, "predicted_ext_temp"] = pred_ext
-            df.loc[idx, "ext_temp"] = pred_ext
-            current_ext_lag = pred_ext
-
-            # Interior prediction (Gradient Boost) limited to 36 hours
-            if model_int is not None and current_ts <= int_cutoff_time:
-                df.loc[idx, "int_temp_lag1"] = current_int_lag
-                row_int = df.loc[[idx], FEATURES_INT]
-
-                try:
-                    # CORRECTION : On prédit le delta et on l'ajoute au lag courant
-                    delta_int = model_int.predict(row_int)[0]
-                    pred_int = current_int_lag + delta_int
-                except:
-                    pred_int = current_int_lag
-
-                df.loc[idx, "predicted_int_temp_gb"] = pred_int
-                current_int_lag = pred_int
+                # CORRECTION : On prédit le delta et on l'ajoute au lag courant
+                pred_int = current_int_lag + model_int.predict(df.loc[[idx], FEATURES_INT])[0]
+            except Exception:
+                pred_int = current_int_lag
+            df.loc[idx, "predicted_int_temp_gb"] = pred_int
+            current_int_lag = pred_int
 
     return df
 
@@ -605,6 +599,11 @@ def get_cached_simulation_df() -> pd.DataFrame:
     df = load_and_prepare_data()
 
     model_ext = joblib.load(MODEL_EXT_PATH) if os.path.exists(MODEL_EXT_PATH) else None
+    # Un modèle d'avant la décision 0020 attend une variable de plus : on s'en passe jusqu'au
+    # prochain entraînement plutôt que de faire tomber toutes les routes.
+    if model_ext is not None and getattr(model_ext, "n_features_in_", len(FEATURES_EXT)) != len(FEATURES_EXT):
+        print("Modèle extérieur d'un ancien format : ignoré jusqu'au prochain entraînement.")
+        model_ext = None
     model_int = joblib.load(MODEL_INT_RF_PATH) if os.path.exists(MODEL_INT_RF_PATH) else None
 
     if model_ext is not None:
@@ -645,6 +644,12 @@ def train_models():
     if len(df_ext) < MIN_LIGNES_TRAIN:
         raise HTTPException(status_code=400, detail="Not enough valid exterior measurements after cleaning.")
 
+    # Les EXT_FENETRE_JOURS derniers jours mesurés seulement (décision 0020).
+    ext_ts = pd.to_datetime(df_ext["timestamp"])
+    recent_ext = df_ext[ext_ts >= ext_ts.max() - timedelta(days=EXT_FENETRE_JOURS)]
+    if len(recent_ext) >= MIN_LIGNES_TRAIN:
+        df_ext = recent_ext
+
     X_ext = df_ext[FEATURES_EXT]
     y_ext_delta = df_ext["ext_mesure"] - df_ext["meteo_temp"]
 
@@ -652,15 +657,15 @@ def train_models():
         X_ext, y_ext_delta, test_size=0.2, random_state=42, shuffle=False
     )
 
-    model_ext_ml = HistGradientBoostingRegressor(
-        max_iter=100, learning_rate=0.05, max_depth=5, random_state=42
-    )
-    model_ext_ml.fit(X_tr_ext, y_tr_ext_delta)
+    def ext_regressor():
+        return HistGradientBoostingRegressor(max_iter=100, learning_rate=0.05, max_depth=5, random_state=42)
 
+    # L'erreur se mesure sur les 20 % les plus récents, tenus à l'écart ; le modèle gardé est
+    # ensuite réajusté sur toute la fenêtre, pour connaître les derniers jours.
+    model_ext_ml = ext_regressor().fit(X_tr_ext, y_tr_ext_delta)
     delta_preds_te = model_ext_ml.predict(X_te_ext)
-    reconstructed_preds = X_te_ext["meteo_temp"] + delta_preds_te
-    actual_temps = X_te_ext["meteo_temp"] + y_te_ext_delta
-    rmse_ext = float(np.sqrt(mean_squared_error(actual_temps, reconstructed_preds)))
+    rmse_ext = float(np.sqrt(mean_squared_error(y_te_ext_delta, delta_preds_te)))
+    model_ext_ml = ext_regressor().fit(X_ext, y_ext_delta)
     joblib.dump(model_ext_ml, MODEL_EXT_PATH)
 
     # Target definition: predicting the delta

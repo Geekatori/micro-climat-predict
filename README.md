@@ -61,6 +61,7 @@ Les choix propres à ce fork. Chaque fiche dit quand la rouvrir.
 | [0017](docs/decisions/0017-inertie-recalee-chaque-jour.md) | Le modèle d'inertie s'ajuste sur des simulations recalées chaque jour sur la mesure |
 | [0018](docs/decisions/0018-cible-interieure-la-piece-la-plus-fraiche.md) | La cible intérieure reste la pièce la plus fraîche, et les capteurs publiés le disent |
 | [0019](docs/decisions/0019-poele-regime-regule.md) | Poêle en marche, la prévision revient vers le niveau des 24 dernières heures |
+| [0020](docs/decisions/0020-modele-exterieur-direct-sur-30-jours.md) | Le modèle extérieur corrige Open-Meteo sans relire sa propre prévision, appris sur 30 jours |
 
 ## Licence
 

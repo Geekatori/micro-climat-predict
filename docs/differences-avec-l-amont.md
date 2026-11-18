@@ -45,6 +45,10 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   trou est rempli par Open-Meteo pour la simulation. Le modèle apprenait aussi sur ces lignes,
   avec un écart à Open-Meteo nul, et sa correction se tassait vers Open-Meteo. Sa cible est
   désormais `ext_mesure`, la mesure gardée avant ce remplissage.
+- **Modèle extérieur direct, appris sur 30 jours** : il ne relit plus sa propre prévision du pas
+  précédent, et se réentraîne sur toute sa fenêtre au lieu des 80 % les plus anciens. La
+  prévision surestimait l'extérieur de 1,4 °C en moyenne et annonçait de fausses ouvertures en
+  saison froide ([décision 0020](decisions/0020-modele-exterieur-direct-sur-30-jours.md)).
 - **Pic extérieur à 0 °C annoncé** : un pic à 0,0 °C était lu comme absent et le message de
   pic disparaissait.
 - **`/api/forecast/smart` n'écrit plus dans le cache de simulation** : il travaille sur une
