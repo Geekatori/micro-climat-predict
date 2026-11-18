@@ -51,6 +51,11 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   copie, les autres routes ne voient plus ses prédictions court terme.
 - **Simulation d'inertie depuis le début des données**, et non depuis le premier relevé de CO₂
   ([décision 0013](decisions/0013-simulation-depuis-le-debut-des-donnees.md)).
+- **Modèle d'inertie ajusté sur des journées recalées** : la simulation repart de la mesure
+  chaque jour, et les paramètres sont cherchés par moindres carrés robustes dans des bornes
+  larges, au lieu d'une grille dont le couplage à l'extérieur plafonnait à plus de 400 jours de
+  constante de temps. La simulation libre de l'amont dérivait de plusieurs degrés et gelait les
+  paramètres ([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)).
 - **État courant du conseil jugé sur la mesure**, pas sur la simulation du passé
   ([décision 0010](decisions/0010-etat-courant-sur-la-mesure.md)).
 

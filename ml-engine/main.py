@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from scipy.optimize import minimize
+from scipy.optimize import least_squares
 import json
 import os
 import sqlite3
@@ -252,100 +252,146 @@ def add_behavioral_features(df: pd.DataFrame, mode: str | None = None) -> pd.Dat
 
     return df
 
-def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e: float) -> np.ndarray:
+# Recalage de la simulation d'inertie sur la mesure, en pas de 10 min : chaque jour à minuit UTC.
+# Une simulation libre depuis le début des données dérivait de plusieurs degrés en quelques
+# semaines (-12,6 °C simulés le 18/11/2026 pour un salon à 19 °C) ; l'ajustement, qui écartait
+# les écarts de plus de 2,5 °C, n'apprenait plus rien des jours récents. Recalée, la simulation
+# mesure ce que le modèle sait faire : prévoir les 24 heures qui suivent une mesure.
+RECALAGE_PAS = 144
+
+
+def _inertia_inputs(df: pd.DataFrame) -> dict:
+    """Les entrées de la simulation d'inertie, en tableaux, lissées comme le modèle les lit."""
     n = len(df)
-    T_est = np.full(n, np.nan)
-    if n == 0:
-        return T_est
-
     raw_ext = df["ext_temp"].fillna(df["meteo_temp"]).values
-    ext_temps = pd.Series(raw_ext).rolling(window=18, min_periods=1).mean().values
-
-    rad_vals = df["direct_radiation"].fillna(0.0).values if "direct_radiation" in df.columns else np.zeros(n)
-    wind_vals = df["wind_speed"].fillna(0.0).values if "wind_speed" in df.columns else np.zeros(n)
-
-    co2_raw_series = pd.Series(df["co2"].values) if "co2" in df.columns else pd.Series(np.full(n, np.nan))
-    co2_smooth = co2_raw_series.rolling(window=12, min_periods=1).mean().values
-
-    actuals = df["int_temp_min"].values if "int_temp_min" in df.columns else np.full(n, np.nan)
-    window_flags = df["window_open_flag"].values if "window_open_flag" in df.columns else np.zeros(n)
-    sun_elevs = df["sun_elevation"].fillna(0).values if "sun_elevation" in df.columns else np.zeros(n)
-
-    raw_solar_series = (
-        b * (rad_vals / 1000.0) +
-        e * np.maximum(0.0, np.sin(np.radians(sun_elevs)))
-    )
-    solar_inertia_smooth = pd.Series(raw_solar_series).rolling(window=18, min_periods=1).mean().values
-
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    rad = df["direct_radiation"].fillna(0.0).values if "direct_radiation" in df.columns else np.zeros(n)
+    elev = df["sun_elevation"].fillna(0).values if "sun_elevation" in df.columns else np.zeros(n)
+    co2 = pd.Series(df["co2"].values if "co2" in df.columns else np.full(n, np.nan))
+    co2_smooth = co2.rolling(window=12, min_periods=1).mean().values
     timestamps = pd.to_datetime(df["timestamp"])
+    minutes = (timestamps.dt.hour * 60 + timestamps.dt.minute).values
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    return {
+        "ext": pd.Series(raw_ext).rolling(window=18, min_periods=1).mean().values,
+        "rad": pd.Series(rad / 1000.0).rolling(window=18, min_periods=1).mean().values,
+        "sun": pd.Series(np.maximum(0.0, np.sin(np.radians(elev)))).rolling(window=18, min_periods=1).mean().values,
+        "wind": np.maximum(0.0, df["wind_speed"].fillna(0.0).values) if "wind_speed" in df.columns else np.zeros(n),
+        "co2_excess": np.where(np.isnan(co2_smooth), 0.0, np.sqrt(np.maximum(0.0, co2_smooth - 500.0))),
+        "actual": df["int_temp_min"].values.astype(float) if "int_temp_min" in df.columns else np.full(n, np.nan),
+        "window": df["window_open_flag"].fillna(0).values.astype(int) if "window_open_flag" in df.columns else np.zeros(n, dtype=int),
+        "future": (timestamps > now_utc).values,
+        "recalage": (minutes % (RECALAGE_PAS * 10)) == 0,
+    }
 
-    valid_indices = np.where(~np.isnan(actuals))[0]
-    if len(valid_indices) == 0:
-        return T_est
 
-    first_valid_idx = valid_indices[0]
-    target_start_time = timestamps.iloc[first_valid_idx] + timedelta(hours=1)
+def _simulate_inputs(inp: dict, a: float, b: float, c: float, d: float, e: float) -> tuple[np.ndarray, np.ndarray]:
+    """Simulation pas à pas. Renvoie (température simulée, pas repartis de la mesure).
 
-    start_indices = np.where(timestamps >= target_start_time)[0]
-    if len(start_indices) == 0:
-        return T_est
+    Passé : la simulation repart de la mesure au premier pas mesuré, à chaque recalage
+    (minuit UTC) et pendant les fenêtres ouvertes ; entre deux, elle suit le modèle.
+    Futur : elle repart de la dernière mesure et suit le modèle jusqu'au bout.
+    Chaque pas : T + a·(1 + 0,03·vent)·(ext - T) + b·rayonnement + e·sin(soleil) + d·CO₂ - c,
+    borné à ±0,7 °C. `c` est un terme constant, positif (perte) ou négatif (apport).
+    """
+    n = len(inp["actual"])
+    T_est = np.full(n, np.nan)
+    reparti = np.zeros(n, dtype=bool)
+    # Listes Python : l'accès élément par élément y est bien plus rapide que sur numpy, et
+    # l'ajustement appelle cette boucle quelques centaines de fois.
+    ext, wind, actual = inp["ext"].tolist(), inp["wind"].tolist(), inp["actual"].tolist()
+    solar = (b * inp["rad"] + e * inp["sun"] + d * inp["co2_excess"]).tolist()
+    future, window, recalage = inp["future"].tolist(), inp["window"].tolist(), inp["recalage"].tolist()
+    co2_part = (d * inp["co2_excess"]).tolist()
 
-    # L'amont démarrait au premier relevé de CO₂ : brancher un capteur réduisait
-    # l'ajustement aux seuls jours qui suivent. Sans CO₂, l'excès vaut 0.
-    start_idx = 0
-
-    base_val = float(actuals[start_idx]) if not np.isnan(actuals[start_idx]) else float(actuals[first_valid_idx])
-
-    last_known_val = base_val
-    in_future_mode = False
-
-    for i in range(start_idx, n):
-        dt = timestamps.iloc[i]
-        ext = ext_temps[i]
-        solar_thermal_input = solar_inertia_smooth[i]
-        wind = max(0.0, wind_vals[i])
-
-        co2_val = co2_smooth[i]
-        if np.isnan(co2_val):
-            co2_excess = 0.0
+    prev = None
+    last_known = None
+    in_future = False
+    for i in range(n):
+        mesure = actual[i]
+        known = mesure == mesure  # faux pour NaN
+        if future[i]:
+            if not in_future:
+                # Le futur repart de la dernière mesure, pas du segment simulé en cours.
+                in_future = True
+                prev = last_known
+                if prev is None:
+                    break
+            # Pas de CO₂ dans le futur : l'occupation à venir est inconnue.
+            gain = solar[i] - co2_part[i]
         else:
-            co2_raw = max(0.0, co2_val - 500.0)
-            co2_excess = np.sqrt(co2_raw) if co2_raw > 0 else 0.0
+            if known:
+                last_known = mesure
+                if prev is None or recalage[i] or window[i] == 1 or (i > 0 and window[i - 1] == 1):
+                    T_est[i] = prev = mesure
+                    reparti[i] = True
+                    continue
+            elif prev is None:
+                continue
+            gain = solar[i]
+        nxt = prev + a * (1.0 + 0.03 * wind[i]) * (ext[i] - prev) + gain - c
+        prev = min(max(nxt, prev - 0.7), prev + 0.7)
+        T_est[i] = prev
+    return T_est, reparti
 
-        actual = actuals[i] if not np.isnan(actuals[i]) else np.nan
 
-        if not np.isnan(actual):
-            last_known_val = actual
+def simulate_inertia(df: pd.DataFrame, a: float, b: float, c: float, d: float, e: float) -> np.ndarray:
+    if len(df) == 0:
+        return np.full(0, np.nan)
+    return _simulate_inputs(_inertia_inputs(df), a, b, c, d, e)[0]
 
-        if dt > now_utc:
-            co2_excess = 0.0
-            if not in_future_mode:
-                prev = last_known_val
-                in_future_mode = True
-            else:
-                prev = T_est[i - 1]
 
-            effective_a = a * (1.0 + 0.03 * wind)
-            next_val = prev + (effective_a * (ext - prev)) + solar_thermal_input + (d * co2_excess) - c
-            T_est[i] = np.clip(next_val, prev - 0.7, prev + 0.7)
-            continue
+# Bornes de l'ajustement d'inertie (a, b, c, d, e), par pas de 10 min. a couvre une constante
+# de temps de 8 h à plus d'un an : la grille de l'amont plafonnait à 1,6e-5 (plus de 400
+# jours), et le modèle ne pouvait pas faire dépendre la perte de l'écart à l'extérieur.
+INERTIA_BOUNDS = ([1e-5, 0.0, -0.05, 0.0, 0.0], [2e-2, 0.5, 0.05, 0.01, 0.2])
 
-        if window_flags[i] == 1:
-            T_est[i] = actual if not np.isnan(actual) else (T_est[i-1] if i > 0 else base_val)
-            continue
 
-        if i == start_idx or window_flags[i - 1] == 1:
-            T_est[i] = actual if not np.isnan(actual) else last_known_val
-            continue
+def fit_inertia(df: pd.DataFrame) -> dict:
+    """Ajuste a, b, c, d, e sur les simulations recalées chaque jour, à moindres carrés robustes.
 
-        prev = T_est[i - 1] if not np.isnan(T_est[i - 1]) else last_known_val
+    L'erreur porte sur chaque pas mesuré du passé qui n'est pas un point de départ, hors
+    fenêtres ouvertes. La perte `soft_l1` (au-delà de 0,5 °C, l'écart compte de moins en moins)
+    tient les heures de chauffe du poêle, que le modèle ne connaît pas, sans les retirer.
+    Trois départs pour a, pour ne pas dépendre d'un minimum local. `d` (CO₂) n'est ajusté que
+    si le CO₂ est lu.
+    """
 
-        effective_a = a * (1.0 + 0.03 * wind)
-        next_val = prev + (effective_a * (ext - prev)) + solar_thermal_input + (d * co2_excess) - c
-        T_est[i] = np.clip(next_val, prev - 0.7, prev + 0.7)
+    inp = _inertia_inputs(df)
+    scored = ~inp["future"] & ~np.isnan(inp["actual"]) & (inp["window"] == 0)
+    with_d = bool(np.any(inp["co2_excess"] > 0))
+    lo, hi = INERTIA_BOUNDS
+    keep = [0, 1, 2, 3, 4] if with_d else [0, 1, 2, 4]
 
-    return T_est
+    def full(x):
+        p = [0.0] * 5
+        for k, v in zip(keep, x):
+            p[k] = float(v)
+        return p
+
+    def residuals(x):
+        pred, reparti = _simulate_inputs(inp, *full(x))
+        m = scored & ~reparti & ~np.isnan(pred)
+        return pred[m] - inp["actual"][m]
+
+    if residuals(np.array([2e-3, 0.03, 0.0, 1e-4, 0.03])[keep]).size < MIN_LIGNES_TRAIN:
+        raise HTTPException(status_code=400, detail="Not enough interior measurements to fit the inertia model.")
+
+    best = None
+    for a0 in (3e-4, 2e-3, 8e-3):
+        x0 = np.array([a0, 0.03, 0.0, 1e-4, 0.03])[keep]
+        r = least_squares(residuals, x0, bounds=(np.array(lo)[keep], np.array(hi)[keep]),
+                          loss="soft_l1", f_scale=0.5,
+                          x_scale=np.array([1e-3, 1e-2, 1e-3, 1e-4, 1e-2])[keep])
+        if best is None or r.cost < best.cost:
+            best = r
+    a, b, c, d, e = full(best.x)
+    err = residuals(best.x)
+    return {
+        "params": {"a": a, "b": b, "c": c, "d": d, "e": e},
+        "mae": float(np.mean(np.abs(err))),
+        "rmse": float(np.sqrt(np.mean(err ** 2))),
+        "points": int(err.size),
+    }
 
 def run_ml_simulation(df: pd.DataFrame, model_ext, model_int=None) -> pd.DataFrame:
     df = df.copy()
@@ -605,53 +651,10 @@ def train_models():
 
     joblib.dump(model_int_ml, MODEL_INT_RF_PATH)
 
-    # Grid search optimization for STD model
-    a_grid = [0.000008, 0.000012, 0.000016]
-    b_grid = [0.02, 0.03, 0.045]
-    c_grid = [0.009, 0.011, 0.013]
-    d_grid = [0.00007, 0.0001, 0.00015]
-    e_grid = [0.032, 0.038, 0.045]
-
-    best_params = {"a": 0.000012, "b": 0.03, "c": 0.011, "d": 0.0001, "e": 0.035}
-    best_score = float("inf")
-
-    df_eval = df_clean.copy()
-    eval_mask = (df_eval["window_open_flag"] == 0).values
-    actuals = df_eval["int_temp_min"].values
-
-    for a in a_grid:
-        for b in b_grid:
-            for c in c_grid:
-                for d in d_grid:
-                    for e in e_grid:
-                        preds = simulate_inertia(df_eval, a, b, c, d, e)
-                        valid_mask = eval_mask & ~np.isnan(actuals)
-                        if not np.any(valid_mask): continue
-                        diff = actuals[valid_mask] - preds[valid_mask]
-                        normal_error_mask = np.abs(diff) < 2.5
-                        if not np.any(normal_error_mask): continue
-                        filtered_diff = diff[normal_error_mask]
-                        score = np.percentile(np.abs(filtered_diff), 90) + np.abs(np.mean(filtered_diff))
-                        if score < best_score:
-                            best_score = score
-                            best_params = {"a": a, "b": b, "c": c, "d": d, "e": e}
-
-    # Fine tuning via scipy
-    def objective(x):
-        a, b, c, d, e = x[0], x[1], x[2], x[3], x[4]
-        if a < 0 or b < 0 or d < 0 or e < 0: return 1e6
-        preds = simulate_inertia(df_eval, a, b, c, d, e)
-        valid_mask = eval_mask & ~np.isnan(actuals)
-        if not np.any(valid_mask): return 1e6
-        diff = actuals[valid_mask] - preds[valid_mask]
-        normal_error_mask = np.abs(diff) < 2.5
-        if not np.any(normal_error_mask): return 1e6
-        filtered_diff = diff[normal_error_mask]
-        return float(np.percentile(np.abs(filtered_diff), 90) + (1.0 * np.abs(np.mean(filtered_diff))))
-
-    result = minimize(objective, [best_params["a"], best_params["b"], best_params["c"], best_params["d"], best_params["e"]], method="Nelder-Mead", options={"maxiter": 100, "xatol": 1e-5})
-    best_params_std = {"a": float(result.x[0]), "b": float(result.x[1]), "c": float(result.x[2]), "d": float(result.x[3]), "e": float(result.x[4])}
-    rmse_std = float(result.fun)
+    # Modèle d'inertie : ajusté sur des simulations recalées chaque jour, sur tout le passé
+    # (voir fit_inertia). Plus de grille : ses bornes ne contenaient pas une maison réelle.
+    inertia = fit_inertia(df)
+    best_params_std = inertia["params"]
 
     joblib.dump(best_params_std, MODEL_INT_STD_PATH)
 
@@ -662,7 +665,7 @@ def train_models():
         conn.execute("""
             INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (now_str, len(df_ext), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std}"))
+        """, (now_str, len(df_ext), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std} ; MAE 24 h {inertia['mae']:.3f} sur {inertia['points']} pas"))
 
     # Invalidate cache so next requests trigger re-simulation with new models
     clear_caches()
@@ -672,7 +675,8 @@ def train_models():
         "status": "success",
         "rmse_ext": round(rmse_ext, 4),
         "rmse_int_gb": round(rmse_int_gb, 4),
-        "rmse_int_std": round(rmse_std, 4),
+        "mae_int_std": round(inertia["mae"], 4),
+        "rmse_int_std": round(inertia["rmse"], 4),
         "params_std": best_params_std
     }
 

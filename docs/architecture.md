@@ -46,8 +46,17 @@ mesure réelle, gardée avant ce remplissage dans `ext_mesure`.
 
 ## Le modèle d'inertie
 
-Le modèle d'inertie thermique est ajusté sur une simulation qui part du début des données, quel
-que soit le premier relevé de CO₂ ([décision 0013](decisions/0013-simulation-depuis-le-debut-des-donnees.md)).
+Le modèle d'inertie est une équation pas à pas : à chaque pas de 10 minutes, l'intérieur se
+rapproche de l'extérieur lissé sur 3 h (`a`, majoré par le vent), gagne le rayonnement direct
+(`b`) et la hauteur du soleil (`e`), l'occupation par le CO₂ si elle est lue (`d`), et un terme
+constant (`c`, perte ou apport). La variation est bornée à ±0,7 °C par pas.
+
+La simulation repart de la mesure chaque jour à minuit UTC ; le futur repart de la dernière
+mesure. Les paramètres sont ajustés sur ces journées recalées, sur tout l'historique
+([décision 0013](decisions/0013-simulation-depuis-le-debut-des-donnees.md)), à moindres carrés
+robustes et dans des bornes qui couvrent une maison réelle
+([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)). L'erreur journalisée à
+l'entraînement est donc celle d'une prévision à 0 à 24 h.
 Quand `CO2_MODELE=1`, un détecteur d'ouverture par le CO₂ exclut de l'ajustement les périodes
 fenêtres ouvertes ; son critère s'inverse avec la saison, et son seuil « intérieur chaud » est
 `INT_HOT_THRESHOLD_C` ([décision 0008](decisions/0008-mode-saisonnier.md)).
@@ -62,7 +71,7 @@ fenêtres ouvertes ; son critère s'inverse avec la saison, et son seuil « int�
   l'extérieur est déjà favorable, seule la fermeture est annoncée : l'ouverture vaut `unknown`
   avec `creneau_en_cours: true`.
 - **L'état courant** se juge sur l'intérieur mesuré (dernier point de moins d'une heure), pas sur
-  la simulation, qui dérive de plusieurs degrés dans le passé. Sans mesure fraîche, on lit le
+  la simulation passée. Sans mesure fraîche, on lit le
   premier pas futur, qui repart lui aussi de la dernière mesure
   ([décision 0010](decisions/0010-etat-courant-sur-la-mesure.md)).
 - **L'hystérésis** vaut 0,5 °C en saison chaude, 0,3 °C en saison froide ; une bascule n'est
@@ -91,7 +100,11 @@ en mémoire dans HA et reviennent à la publication suivante après un redémarr
 - En plein hiver l'extérieur ne dépasse jamais l'intérieur : les capteurs d'ouverture et de
   fermeture restent `unknown` des semaines durant. C'est attendu. L'aération d'hygiène
   relèverait d'une règle distincte, non écrite.
-- `stove_power` est archivé mais pas encore lu par le modèle.
+- `stove_power` est archivé mais pas encore lu par le modèle. Poêle en marche, la prévision
+  intérieure fait moins bien que la persistance de la dernière mesure
+  ([décision 0017](decisions/0017-inertie-recalee-chaque-jour.md)).
+- La cible du modèle intérieur est `int_temp_min`, le minimum des sondes intérieures : poêle en
+  marche, c'est le plus souvent la sonde la plus éloignée du poêle.
 - L'heure locale d'affichage est `Europe/Paris`, en dur dans le moteur et l'interface (hérité
   de l'amont).
 - Sans identifiant unique, les entités publiées dans HA ne sont ni renommables ni rattachables à
