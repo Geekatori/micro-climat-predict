@@ -40,6 +40,10 @@ L'interpolation comble les trous entre deux relevés, jamais après le dernier :
 prévision météo, plus récents que toute mesure, restent sans mesure et n'entrent pas dans
 l'entraînement.
 
+Une sonde figée (24 pas identiques) est écartée, puis l'extérieur manquant est rempli par
+Open-Meteo pour la simulation et le conseil. Le modèle extérieur, lui, n'apprend que sur la
+mesure réelle, gardée avant ce remplissage dans `ext_mesure`.
+
 ## Le modèle d'inertie
 
 Le modèle d'inertie thermique est ajusté sur une simulation qui part du début des données, quel

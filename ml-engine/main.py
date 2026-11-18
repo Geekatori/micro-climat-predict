@@ -501,6 +501,10 @@ def load_and_prepare_data() -> pd.DataFrame:
     df = add_multiscale_features(df)
     df = add_autoregressive_lags(df)
 
+    # La mesure extérieure réelle, gardée avant le remplissage par Open-Meteo : c'est la
+    # cible du modèle extérieur. Remplie, une sonde figée écartée plus haut donnait une
+    # cible ext_temp - meteo_temp nulle, et la correction se tassait vers Open-Meteo.
+    df["ext_mesure"] = df["ext_temp"]
     df["ext_temp"] = df["ext_temp"].fillna(df["meteo_temp"])
     df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
     return df
@@ -543,8 +547,14 @@ def train_models():
     if df_clean.empty:
         raise HTTPException(status_code=400, detail="Not enough valid data after cleaning.")
 
-    X_ext = df_clean[FEATURES_EXT]
-    y_ext_delta = df_clean["ext_temp"] - df_clean["meteo_temp"]
+    # Le modèle extérieur n'apprend que sur une mesure réelle (voir ext_mesure) ; les
+    # autres usages gardent ext_temp rempli par Open-Meteo.
+    df_ext = df_clean.dropna(subset=["ext_mesure", "meteo_temp"])
+    if df_ext.empty:
+        raise HTTPException(status_code=400, detail="Not enough valid exterior measurements after cleaning.")
+
+    X_ext = df_ext[FEATURES_EXT]
+    y_ext_delta = df_ext["ext_mesure"] - df_ext["meteo_temp"]
 
     X_tr_ext, X_te_ext, y_tr_ext_delta, y_te_ext_delta = train_test_split(
         X_ext, y_ext_delta, test_size=0.2, random_state=42, shuffle=False
@@ -637,11 +647,14 @@ def train_models():
 
     joblib.dump(best_params_std, MODEL_INT_STD_PATH)
 
+    # Le reset total supprime metrics.db, et le collecteur la recrée sans training_logs :
+    # sans cet appel, l'INSERT levait no such table jusqu'au redémarrage du moteur.
+    init_db()
     with connexion() as conn:
         conn.execute("""
             INSERT INTO training_logs (timestamp, rows_ext, rows_int, rmse_ext, rmse_int, status, message)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (now_str, len(df_clean), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std}"))
+        """, (now_str, len(df_ext), len(df_clean), rmse_ext, rmse_int_gb, "success", f"Models trained. STD params: {best_params_std}"))
 
     # Invalidate cache so next requests trigger re-simulation with new models
     clear_caches()
@@ -904,7 +917,8 @@ async def forecast_analysis():
     closing_time = _within_horizon(advice["closing"])
 
     peak_msg = None
-    if peak_info and peak_info.get("peak_temp") and peak_info.get("timestamp"):
+    # is not None : un pic à 0,0 °C est un pic.
+    if peak_info and peak_info.get("peak_temp") is not None and peak_info.get("timestamp"):
         from zoneinfo import ZoneInfo
         ts_str = str(peak_info["timestamp"])
         dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -935,7 +949,9 @@ async def forecast_smart(scope: str = "all"):
     if _smart_json_cache["json"] is not None and _smart_json_cache["timestamp"] == cache_key:
         return _smart_json_cache["json"]
 
-    df = get_cached_simulation_df()
+    # Copie : la boucle plus bas écrit dans predicted_int_temp_gb, et le DataFrame en cache
+    # est partagé par toutes les routes jusqu'à la prochaine collecte.
+    df = get_cached_simulation_df().copy()
     model_int = joblib.load(MODEL_INT_RF_PATH)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     timestamps = pd.to_datetime(df["timestamp"])
@@ -1018,6 +1034,7 @@ async def get_annotated_metrics():
 @app.get("/api/status/last-training")
 def get_last_training():
     try:
+        init_db()  # la table manque après un reset total, voir train_models()
         with connexion() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT timestamp FROM training_logs ORDER BY id DESC LIMIT 1")

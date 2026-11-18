@@ -37,6 +37,18 @@ Ce dépôt est un fork de [jmfavreau/micro-climat-predict](https://codeberg.org/
   attend un verrou 30 s au lieu de 5.
 - **Reset total** : supprime les trois fichiers de modèle réellement produits. L'amont ne
   supprimait que `model_int.joblib`, qui n'existe pas.
+- **Entraînement possible juste après un reset** : la table `training_logs` n'était créée qu'au
+  démarrage du `ml-engine`. Après un reset, la base recréée par le collecteur ne l'avait pas :
+  `/api/train` répondait 500 et `/health/fraicheur` restait en 503 jusqu'au redémarrage du
+  moteur. Elle est recréée avant chaque écriture et chaque lecture.
+- **Le modèle extérieur apprend sur la mesure réelle** : une sonde figée est écartée, puis le
+  trou est rempli par Open-Meteo pour la simulation. Le modèle apprenait aussi sur ces lignes,
+  avec un écart à Open-Meteo nul, et sa correction se tassait vers Open-Meteo. Sa cible est
+  désormais `ext_mesure`, la mesure gardée avant ce remplissage.
+- **Pic extérieur à 0 °C annoncé** : un pic à 0,0 °C était lu comme absent et le message de
+  pic disparaissait.
+- **`/api/forecast/smart` n'écrit plus dans le cache de simulation** : il travaille sur une
+  copie, les autres routes ne voient plus ses prédictions court terme.
 - **Simulation d'inertie depuis le début des données**, et non depuis le premier relevé de CO₂
   ([décision 0013](decisions/0013-simulation-depuis-le-debut-des-donnees.md)).
 - **État courant du conseil jugé sur la mesure**, pas sur la simulation du passé
